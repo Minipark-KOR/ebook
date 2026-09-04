@@ -1,0 +1,8 @@
+# Vercel 배포 제외 파일
+.next/cache
+node_modules/.cache
+*.log
+*.tsbuildinfo
+*.swp
+*.swo
+.DS_Store

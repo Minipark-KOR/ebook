@@ -2,19 +2,22 @@
 
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
-import { useParams } from "next/navigation";
+import { useParams, useSearchParams, useRouter } from "next/navigation";
 import { fetchNovel, fetchChapters, fetchMetadata, Novel, Chapter, NovelMetadata } from "@/lib/api";
 
 const PAGE_SIZE = 100;
 
 export default function NovelPage() {
   const params = useParams();
+  const searchParams = useSearchParams();
+  const router = useRouter();
   const novelId = params.id as string;
+  const initialPage = Math.max(1, Number(searchParams.get("page")) || 1);
 
   const [novel, setNovel] = useState<Novel | null>(null);
   const [chapters, setChapters] = useState<Chapter[]>([]);
   const [metadata, setMetadata] = useState<NovelMetadata | null>(null);
-  const [page, setPage] = useState(1);
+  const [page, setPage] = useState(initialPage);
   const [totalPages, setTotalPages] = useState(1);
   const [loading, setLoading] = useState(true);
   const [metadataLoading, setMetadataLoading] = useState(true);
@@ -56,6 +59,17 @@ export default function NovelPage() {
     el.scrollIntoView({ behavior: "smooth", block: "center" });
     setPendingJumpChapter(null);
   }, [pendingJumpChapter, chapters]);
+
+  // Keep URL query in sync with the current page (so back/forward and links work).
+  useEffect(() => {
+    const currentPage = Number(searchParams.get("page")) || 1;
+    if (currentPage === page) return;
+    const qs = new URLSearchParams(searchParams.toString());
+    if (page === 1) qs.delete("page");
+    else qs.set("page", String(page));
+    const next = qs.toString() ? `?${qs.toString()}` : "";
+    router.replace(`/novel/${novelId}${next}`, { scroll: false });
+  }, [page, novelId, router, searchParams]);
 
   function handleJump(e: React.FormEvent) {
     e.preventDefault();
@@ -171,6 +185,36 @@ export default function NovelPage() {
         </div>
 
         {/* Chapter List */}
+        <div className="sticky top-0 z-10 bg-gray-50 dark:bg-gray-900 -mx-4 px-4 py-2 mb-2">
+          <form
+            onSubmit={handleJump}
+            className="flex flex-wrap items-center justify-end gap-2"
+          >
+            <label htmlFor="jump-input" className="text-sm text-gray-600 dark:text-gray-400">
+              회차 바로가기
+            </label>
+            <input
+              id="jump-input"
+              type="number"
+              min={1}
+              max={novel.totalChapters}
+              value={jumpInput}
+              onChange={(e) => setJumpInput(e.target.value)}
+              placeholder="회차 번호"
+              className="w-24 px-2 py-1 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 text-gray-900 dark:text-white"
+            />
+            <button
+              type="submit"
+              className="px-3 py-1 bg-blue-600 text-white rounded hover:bg-blue-700"
+            >
+              이동
+            </button>
+            {jumpError && (
+              <span className="text-sm text-red-500 basis-full text-right">{jumpError}</span>
+            )}
+          </form>
+        </div>
+
         <div className="space-y-2" ref={chapterListRef}>
           {chapters.map((chapter) => (
             <Link
@@ -190,34 +234,6 @@ export default function NovelPage() {
             </Link>
           ))}
         </div>
-
-        <form
-          onSubmit={handleJump}
-          className="flex flex-wrap items-center gap-2 mt-8 mb-2"
-        >
-          <label htmlFor="jump-input" className="text-sm text-gray-600 dark:text-gray-400">
-            회차 바로가기
-          </label>
-          <input
-            id="jump-input"
-            type="number"
-            min={1}
-            max={novel.totalChapters}
-            value={jumpInput}
-            onChange={(e) => setJumpInput(e.target.value)}
-            placeholder="회차 번호"
-            className="w-24 px-2 py-1 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 text-gray-900 dark:text-white"
-          />
-          <button
-            type="submit"
-            className="px-3 py-1 bg-blue-600 text-white rounded hover:bg-blue-700"
-          >
-            이동
-          </button>
-          {jumpError && (
-            <span className="text-sm text-red-500">{jumpError}</span>
-          )}
-        </form>
 
         {totalPages > 1 && (
           <div className="flex justify-center gap-2 mt-2">

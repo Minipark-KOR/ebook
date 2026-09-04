@@ -13,6 +13,7 @@ export default function NovelPage() {
   const router = useRouter();
   const novelId = params.id as string;
   const initialPage = Math.max(1, Number(searchParams.get("page")) || 1);
+  const initialFocus = Number(searchParams.get("focus")) || null;
 
   const [novel, setNovel] = useState<Novel | null>(null);
   const [chapters, setChapters] = useState<Chapter[]>([]);
@@ -25,7 +26,7 @@ export default function NovelPage() {
 
   const [jumpInput, setJumpInput] = useState("");
   const [jumpError, setJumpError] = useState<string | null>(null);
-  const [pendingJumpChapter, setPendingJumpChapter] = useState<number | null>(null);
+  const [pendingJumpChapter, setPendingJumpChapter] = useState<number | null>(initialFocus);
   const chapterListRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -61,12 +62,15 @@ export default function NovelPage() {
   }, [pendingJumpChapter, chapters]);
 
   // Keep URL query in sync with the current page (so back/forward and links work).
+  // Also strip the transient `focus` query once the scroll target has been resolved.
   useEffect(() => {
     const currentPage = Number(searchParams.get("page")) || 1;
-    if (currentPage === page) return;
+    const hasFocus = searchParams.has("focus");
+    if (currentPage === page && !hasFocus) return;
     const qs = new URLSearchParams(searchParams.toString());
     if (page === 1) qs.delete("page");
     else qs.set("page", String(page));
+    qs.delete("focus");
     const next = qs.toString() ? `?${qs.toString()}` : "";
     router.replace(`/novel/${novelId}${next}`, { scroll: false });
   }, [page, novelId, router, searchParams]);

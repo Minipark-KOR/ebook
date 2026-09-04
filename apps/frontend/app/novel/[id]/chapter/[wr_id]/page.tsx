@@ -41,6 +41,14 @@ export default function ChapterPage() {
     return () => window.removeEventListener("keydown", onKey);
   }, [navOpen]);
 
+  function buildListHref(focusChapter: number): string {
+    const params = new URLSearchParams();
+    if (listPage && listPage > 1) params.set("page", String(listPage));
+    params.set("focus", String(focusChapter));
+    const qs = params.toString();
+    return `/novel/${novelId}${qs ? `?${qs}` : ""}`;
+  }
+
   if (loading) {
     return (
       <div className="min-h-screen bg-gray-50 dark:bg-gray-900 flex items-center justify-center">
@@ -69,7 +77,7 @@ export default function ChapterPage() {
       >
         <div onClick={(e) => e.stopPropagation()}>
           <Link
-            href={listPage && listPage > 1 ? `/novel/${novelId}?page=${listPage}` : `/novel/${novelId}`}
+            href={buildListHref(chapter.chapter)}
             className="text-blue-600 dark:text-blue-400 hover:underline mb-4 inline-block"
           >
             ← 회차 목록으로 돌아가기
@@ -186,7 +194,7 @@ export default function ChapterPage() {
           {/* Center zone: open chapter list */}
           <div className="flex-1 h-full flex items-center justify-center pointer-events-none">
             <Link
-              href={listPage && listPage > 1 ? `/novel/${novelId}?page=${listPage}` : `/novel/${novelId}`}
+              href={buildListHref(chapter.chapter)}
               onClick={(e) => e.stopPropagation()}
               className="pointer-events-auto px-6 py-3 bg-white/90 dark:bg-gray-800/90 hover:bg-white dark:hover:bg-gray-800 rounded-lg shadow-lg text-gray-900 dark:text-white font-medium backdrop-blur"
             >

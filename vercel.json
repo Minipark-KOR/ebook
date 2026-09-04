@@ -1,0 +1,20 @@
+{
+  "buildCommand": "npm run build --prefix apps/frontend && pip install -r apps/backend/requirements.txt",
+  "outputDirectory": "apps/frontend/.next",
+  "framework": "nextjs",
+  "functions": {
+    "apps/backend/main.py": {
+      "maxDuration": 30
+    }
+  },
+  "routes": [
+    {
+      "src": "/api/(.*)",
+      "dest": "/apps/backend/main.py"
+    },
+    {
+      "src": "/(.*)",
+      "dest": "/apps/frontend/$1"
+    }
+  ]
+}

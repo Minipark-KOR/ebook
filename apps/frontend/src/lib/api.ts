@@ -51,20 +51,25 @@ export interface NovelMetadata {
   source: string;
 }
 
-async function fetchWithFallback<T>(path: string): Promise<T> {
+async function fetchWithFallback<T>(path: string, timeoutMs = 8000): Promise<T> {
   const bases = [PRIMARY, FALLBACK].filter(Boolean) as string[];
-  // PRIMARY가 빈 문자열이면 상대경로(vercel function) — 이 경우는 단일 시도
   if (PRIMARY === "") bases.unshift("");
   let lastErr: unknown;
   for (const base of bases) {
     const url = `${base}${path}`;
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
     try {
-      const res = await fetch(url, { headers: { "Content-Type": "application/json" } });
+      const res = await fetch(url, {
+        headers: { "Content-Type": "application/json" },
+        signal: controller.signal,
+      });
+      clearTimeout(timeoutId);
       if (!res.ok) throw new Error(`HTTP ${res.status} ${res.statusText} @ ${url}`);
       return (await res.json()) as T;
     } catch (e) {
+      clearTimeout(timeoutId);
       lastErr = e;
-      // 다음 base 시도 (FALLBACK이 없으면 즉시 throw)
       if (base === bases[bases.length - 1]) break;
       console.warn(`[api] primary failed, trying fallback: ${e}`);
     }

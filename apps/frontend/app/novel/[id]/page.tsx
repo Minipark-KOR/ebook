@@ -1,9 +1,11 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { fetchNovel, fetchChapters, fetchMetadata, Novel, Chapter, NovelMetadata } from "@/lib/api";
+
+const PAGE_SIZE = 100;
 
 export default function NovelPage() {
   const params = useParams();
@@ -18,6 +20,11 @@ export default function NovelPage() {
   const [metadataLoading, setMetadataLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
+  const [jumpInput, setJumpInput] = useState("");
+  const [jumpError, setJumpError] = useState<string | null>(null);
+  const [pendingJumpChapter, setPendingJumpChapter] = useState<number | null>(null);
+  const chapterListRef = useRef<HTMLDivElement>(null);
+
   useEffect(() => {
     if (!novelId) return;
 
@@ -25,7 +32,7 @@ export default function NovelPage() {
       .then(([novelData, chaptersData]) => {
         setNovel(novelData);
         setChapters(chaptersData.data);
-        setTotalPages(Math.ceil(chaptersData.pagination.total / 20));
+        setTotalPages(Math.ceil(chaptersData.pagination.total / PAGE_SIZE));
       })
       .catch((err) => setError(err.message))
       .finally(() => setLoading(false));
@@ -39,6 +46,38 @@ export default function NovelPage() {
       .then(setMetadata)
       .finally(() => setMetadataLoading(false));
   }, [novel]);
+
+  // After a pending jump resolves to a chapter rendered in the current page,
+  // scroll it into view and clear the pending marker.
+  useEffect(() => {
+    if (pendingJumpChapter == null) return;
+    const el = document.getElementById(`chapter-${pendingJumpChapter}`);
+    if (!el) return;
+    el.scrollIntoView({ behavior: "smooth", block: "center" });
+    setPendingJumpChapter(null);
+  }, [pendingJumpChapter, chapters]);
+
+  function handleJump(e: React.FormEvent) {
+    e.preventDefault();
+    setJumpError(null);
+    const n = Number(jumpInput);
+    if (!Number.isInteger(n) || n < 1) {
+      setJumpError("회차 번호는 1 이상의 정수여야 합니다");
+      return;
+    }
+    if (novel && n > novel.totalChapters) {
+      setJumpError(`총 ${novel.totalChapters}화까지만 있습니다`);
+      return;
+    }
+    const targetPage = Math.ceil(n / PAGE_SIZE);
+    setJumpInput("");
+    if (targetPage !== page) {
+      setPendingJumpChapter(n);
+      setPage(targetPage);
+    } else {
+      setPendingJumpChapter(n);
+    }
+  }
 
   if (loading) {
     return (
@@ -132,10 +171,11 @@ export default function NovelPage() {
         </div>
 
         {/* Chapter List */}
-        <div className="space-y-2">
+        <div className="space-y-2" ref={chapterListRef}>
           {chapters.map((chapter) => (
             <Link
               key={chapter.wr_id}
+              id={`chapter-${chapter.chapter}`}
               href={`/novel/${novelId}/chapter/${chapter.wr_id}`}
               className="block p-4 bg-white dark:bg-gray-800 rounded-lg shadow hover:shadow-md transition-shadow"
             >
@@ -151,8 +191,36 @@ export default function NovelPage() {
           ))}
         </div>
 
+        <form
+          onSubmit={handleJump}
+          className="flex flex-wrap items-center gap-2 mt-8 mb-2"
+        >
+          <label htmlFor="jump-input" className="text-sm text-gray-600 dark:text-gray-400">
+            회차 바로가기
+          </label>
+          <input
+            id="jump-input"
+            type="number"
+            min={1}
+            max={novel.totalChapters}
+            value={jumpInput}
+            onChange={(e) => setJumpInput(e.target.value)}
+            placeholder="회차 번호"
+            className="w-24 px-2 py-1 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 text-gray-900 dark:text-white"
+          />
+          <button
+            type="submit"
+            className="px-3 py-1 bg-blue-600 text-white rounded hover:bg-blue-700"
+          >
+            이동
+          </button>
+          {jumpError && (
+            <span className="text-sm text-red-500">{jumpError}</span>
+          )}
+        </form>
+
         {totalPages > 1 && (
-          <div className="flex justify-center gap-2 mt-8">
+          <div className="flex justify-center gap-2 mt-2">
             <button
               onClick={() => setPage((p) => Math.max(1, p - 1))}
               disabled={page === 1}

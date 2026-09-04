@@ -69,7 +69,7 @@ export async function fetchNovel(id: string): Promise<Novel> {
 export async function fetchChapters(
   novelId: string,
   page: number = 1,
-  limit: number = 20
+  limit: number = 100
 ): Promise<PaginatedResponse<Chapter>> {
   return fetchJson(`/api/novels/${novelId}/chapters?page=${page}&limit=${limit}`);
 }

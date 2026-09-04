@@ -1,5 +1,6 @@
-// Same-origin proxy via Next.js app router
-const PRIMARY = "";
+// Same-origin proxy via Next.js app router.
+// The catch-all route [/api/[...slug]] automatically URL-decodes path
+// segments, so the client must send raw (un-encoded) Korean IDs.
 
 export interface Novel {
   id: string;
@@ -51,16 +52,12 @@ export interface NovelMetadata {
 }
 
 async function fetchJson<T>(path: string): Promise<T> {
-  console.log('[api] fetchJson start:', path);
   try {
     const res = await fetch(path, { headers: { "Content-Type": "application/json" } });
-    console.log('[api] fetchJson response:', res.status, res.statusText);
     if (!res.ok) throw new Error(`HTTP ${res.status} ${res.statusText}`);
-    const data = await res.json();
-    console.log('[api] fetchJson data:', data);
-    return data as Promise<T>;
+    return (await res.json()) as T;
   } catch (e) {
-    console.error('[api] fetchJson error:', e);
+    console.error('[api] fetchJson error:', path, e);
     throw e;
   }
 }
@@ -71,8 +68,7 @@ export async function fetchNovels(): Promise<Novel[]> {
 }
 
 export async function fetchNovel(id: string): Promise<Novel> {
-  const safeId = id.replace(/%[0-9A-F]{2}/gi, (m) => decodeURIComponent(m));
-  return fetchJson(`/api/novels/${encodeURIComponent(safeId)}`);
+  return fetchJson(`/api/novels/${id}`);
 }
 
 export async function fetchChapters(
@@ -80,7 +76,7 @@ export async function fetchChapters(
   page: number = 1,
   limit: number = 20
 ): Promise<PaginatedResponse<Chapter>> {
-  return fetchJson(`/api/novels/${encodeURIComponent(novelId)}/chapters?page=${page}&limit=${limit}`);
+  return fetchJson(`/api/novels/${novelId}/chapters?page=${page}&limit=${limit}`);
 }
 
 export async function fetchChapter(wrId: number): Promise<ChapterDetail> {
@@ -100,53 +96,4 @@ export async function searchMetadata(
   maxResults: number = 5
 ): Promise<NovelMetadata[]> {
   return fetchJson(`/api/metadata/search?title=${encodeURIComponent(title)}&service=${service}&max_results=${maxResults}`);
-}
-
-export interface NovelMetadata {
-  title: string;
-  authors: string[];
-  publisher: string | null;
-  year: string | null;
-  isbn13: string | null;
-  isbn10: string | null;
-  language: string | null;
-  coverUrl: string | null;
-  description: string | null;
-  subjects: string[];
-  pageCount: number | null;
-  source: string;
-}
-
-export interface Chapter {
-  wr_id: number;
-  chapter: number;
-  title: string;
-  contentLength: number;
-}
-
-export interface ChapterDetail {
-  wr_id: number;
-  chapter: number;
-  title: string;
-  content: string;
-  images: string[];
-  prevChapter: number | null;
-  nextChapter: number | null;
-}
-
-export interface PaginatedResponse<T> {
-  data: T[];
-  pagination: {
-    page: number;
-    limit: number;
-    total: number;
-  };
-}
-
-export interface Novel {
-  id: string;
-  title: string;
-  author: string;
-  totalChapters: number;
-  coverUrl: string | null;
 }

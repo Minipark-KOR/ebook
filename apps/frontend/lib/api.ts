@@ -51,9 +51,18 @@ export interface NovelMetadata {
 }
 
 async function fetchJson<T>(path: string): Promise<T> {
-  const res = await fetch(path, { headers: { "Content-Type": "application/json" } });
-  if (!res.ok) throw new Error(`HTTP ${res.status} ${res.statusText}`);
-  return res.json() as Promise<T>;
+  console.log('[api] fetchJson start:', path);
+  try {
+    const res = await fetch(path, { headers: { "Content-Type": "application/json" } });
+    console.log('[api] fetchJson response:', res.status, res.statusText);
+    if (!res.ok) throw new Error(`HTTP ${res.status} ${res.statusText}`);
+    const data = await res.json();
+    console.log('[api] fetchJson data:', data);
+    return data as Promise<T>;
+  } catch (e) {
+    console.error('[api] fetchJson error:', e);
+    throw e;
+  }
 }
 
 export async function fetchNovels(): Promise<Novel[]> {

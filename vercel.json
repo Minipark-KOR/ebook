@@ -1,5 +1,0 @@
-{
-  "framework": "nextjs",
-  "buildCommand": "npm run build --prefix apps/frontend",
-  "outputDirectory": "apps/frontend/.next"
-}

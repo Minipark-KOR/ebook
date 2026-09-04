@@ -53,6 +53,7 @@ export default function Home() {
             <Link
               key={novel.id}
               href={`/novel/${novel.id}`}
+              prefetch={false}
               className="block p-6 bg-white dark:bg-gray-800 rounded-lg shadow hover:shadow-lg transition-shadow"
             >
               <h2 className="text-xl font-semibold text-gray-900 dark:text-white mb-2">

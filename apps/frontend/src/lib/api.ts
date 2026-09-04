@@ -1,5 +1,5 @@
-// Primary: OCI Caddy HTTPS, Fallback: Cloudflare Named Tunnel
-const PRIMARY = (process.env.NEXT_PUBLIC_API_URL || "https://devforge.152-69-229-246.nip.io").replace(/\/$/, "");
+// Vercel rewrites proxy /api/* to OCI backend; relative paths avoid CORS
+const PRIMARY = "";
 const FALLBACK = (process.env.NEXT_PUBLIC_API_FALLBACK_URL || "").replace(/\/$/, "");
 
 export interface Novel {
@@ -51,7 +51,7 @@ export interface NovelMetadata {
   source: string;
 }
 
-async function fetchWithFallback<T>(path: string, timeoutMs = 8000): Promise<T> {
+async function fetchWithFallback<T>(path: string, timeoutMs = 5000): Promise<T> {
   const bases = [PRIMARY, FALLBACK].filter(Boolean) as string[];
   if (PRIMARY === "") bases.unshift("");
   let lastErr: unknown;
@@ -82,21 +82,19 @@ export async function fetchNovels(): Promise<Novel[]> {
   return data.novels;
 }
 
+export async function fetchNovel(id: string): Promise<Novel> {
+  const safeId = normalizeId(id);
+  return fetchWithFallback(`/api/novels/${encodeURIComponent(safeId)}`);
+}
+
 function normalizeId(id: string): string {
   try {
-    // 이미 인코딩된 것처럼 보이면(%%XX 패턴) 디코드 후 재인코드
     if (/%[0-9A-F]{2}/i.test(id)) {
       return decodeURIComponent(id);
     }
   } catch {
-    // 디코드 실패 시 원본 사용
   }
   return id;
-}
-
-export async function fetchNovel(id: string): Promise<Novel> {
-  const safeId = normalizeId(id);
-  return fetchWithFallback(`/api/novels/${encodeURIComponent(safeId)}`);
 }
 
 export async function fetchChapters(

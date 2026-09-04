@@ -15,7 +15,21 @@ async function proxy(req: NextRequest, slug: string[]) {
   });
   
   const data = await res.json();
-  return NextResponse.json(data, { status: res.status });
+  const response = NextResponse.json(data, { status: res.status });
+  
+  // CORS 헤더 포워딩
+  const corsHeaders = [
+    'access-control-allow-origin',
+    'access-control-allow-credentials',
+    'access-control-allow-methods',
+    'access-control-allow-headers',
+  ];
+  for (const header of corsHeaders) {
+    const value = res.headers.get(header);
+    if (value) response.headers.set(header, value);
+  }
+  
+  return response;
 }
 
 type Props = { params: Promise<{ slug: string[] }> };

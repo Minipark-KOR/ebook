@@ -22,6 +22,7 @@ export interface ChapterDetail {
   chapter: number;
   title: string;
   content: string;
+  images: string[];
   prevChapter: number | null;
   nextChapter: number | null;
 }

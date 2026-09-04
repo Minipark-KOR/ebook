@@ -4,6 +4,7 @@
 """JSON 파일 읽기 서비스"""
 
 import json
+import re
 from pathlib import Path
 from typing import Optional
 
@@ -97,6 +98,15 @@ def get_chapter_list(novel_id: str, page: int = 1, limit: int = 20) -> dict:
     }
 
 
+def extract_images_from_content(content: str) -> list[str]:
+    """마크다운 이미지 문법 ![alt](url) 에서 URL 추출"""
+    if not content:
+        return []
+    # ![alt](url) 패턴 매칭
+    pattern = r'!\[.*?\]\((https?://[^\s\)]+)\)'
+    return re.findall(pattern, content)
+
+
 def get_chapter_detail(wr_id: int) -> Optional[dict]:
     """회차 상세 조회"""
     for novel_dir in DATA_DIR.iterdir():
@@ -125,11 +135,15 @@ def get_chapter_detail(wr_id: int) -> Optional[dict]:
                             next_file = chapters[current_idx + 1]
                             next_chapter = int(next_file.stem)
 
+                    content = data.get("content", "")
+                    images = extract_images_from_content(content)
+
                     return {
                         "wr_id": data.get("wr_id"),
                         "chapter": data.get("chapter"),
                         "title": data.get("title"),
-                        "content": data.get("content"),
+                        "content": content,
+                        "images": images,
                         "prevChapter": prev_chapter,
                         "nextChapter": next_chapter,
                     }

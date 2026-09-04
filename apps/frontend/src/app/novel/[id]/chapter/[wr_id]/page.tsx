@@ -85,6 +85,20 @@ export default function ChapterPage() {
               {paragraph}
             </p>
           ))}
+          {chapter.images && chapter.images.length > 0 && (
+            <div className="mt-8 space-y-4">
+              {chapter.images.map((imgUrl: string, idx: number) => (
+                <div key={idx} className="text-center">
+                  <img
+                    src={imgUrl}
+                    alt={`삽화 ${idx + 1}`}
+                    className="max-w-full h-auto rounded-lg shadow-lg mx-auto"
+                    loading="lazy"
+                  />
+                </div>
+              ))}
+            </div>
+          )}
         </article>
 
         <div className="flex justify-between mt-8 pt-4 border-t border-gray-200 dark:border-gray-700">

@@ -1,6 +1,5 @@
-// Vercel rewrites proxy /api/* to OCI backend; relative paths avoid CORS
+// 프록시 경유 — 동일 오리진, CORS 불필요
 const PRIMARY = "";
-const FALLBACK = (process.env.NEXT_PUBLIC_API_FALLBACK_URL || "").replace(/\/$/, "");
 
 export interface Novel {
   id: string;
@@ -51,50 +50,20 @@ export interface NovelMetadata {
   source: string;
 }
 
-async function fetchWithFallback<T>(path: string, timeoutMs = 5000): Promise<T> {
-  const bases = [PRIMARY, FALLBACK].filter(Boolean) as string[];
-  if (PRIMARY === "") bases.unshift("");
-  let lastErr: unknown;
-  for (const base of bases) {
-    const url = `${base}${path}`;
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
-    try {
-      const res = await fetch(url, {
-        headers: { "Content-Type": "application/json" },
-        signal: controller.signal,
-      });
-      clearTimeout(timeoutId);
-      if (!res.ok) throw new Error(`HTTP ${res.status} ${res.statusText} @ ${url}`);
-      return (await res.json()) as T;
-    } catch (e) {
-      clearTimeout(timeoutId);
-      lastErr = e;
-      if (base === bases[bases.length - 1]) break;
-      console.warn(`[api] primary failed, trying fallback: ${e}`);
-    }
-  }
-  throw lastErr;
+async function fetchJson<T>(path: string): Promise<T> {
+  const res = await fetch(path, { headers: { "Content-Type": "application/json" } });
+  if (!res.ok) throw new Error(`HTTP ${res.status} ${res.statusText}`);
+  return res.json() as Promise<T>;
 }
 
 export async function fetchNovels(): Promise<Novel[]> {
-  const data = await fetchWithFallback<{ novels: Novel[] }>("/api/novels");
+  const data = await fetchJson<{ novels: Novel[] }>("/api/novels");
   return data.novels;
 }
 
 export async function fetchNovel(id: string): Promise<Novel> {
-  const safeId = normalizeId(id);
-  return fetchWithFallback(`/api/novels/${encodeURIComponent(safeId)}`);
-}
-
-function normalizeId(id: string): string {
-  try {
-    if (/%[0-9A-F]{2}/i.test(id)) {
-      return decodeURIComponent(id);
-    }
-  } catch {
-  }
-  return id;
+  const safeId = id.replace(/%[0-9A-F]{2}/gi, (m) => decodeURIComponent(m));
+  return fetchJson(`/api/novels/${encodeURIComponent(safeId)}`);
 }
 
 export async function fetchChapters(
@@ -102,18 +71,18 @@ export async function fetchChapters(
   page: number = 1,
   limit: number = 20
 ): Promise<PaginatedResponse<Chapter>> {
-  return fetchWithFallback(`/api/novels/${encodeURIComponent(novelId)}/chapters?page=${page}&limit=${limit}`);
+  return fetchJson(`/api/novels/${encodeURIComponent(novelId)}/chapters?page=${page}&limit=${limit}`);
 }
 
 export async function fetchChapter(wrId: number): Promise<ChapterDetail> {
-  return fetchWithFallback(`/api/chapters/${wrId}`);
+  return fetchJson(`/api/chapters/${wrId}`);
 }
 
 export async function fetchMetadata(
   title: string,
   service: "goob" | "openl" | "brave" = "brave"
 ): Promise<NovelMetadata> {
-  return fetchWithFallback(`/api/metadata/lookup?title=${encodeURIComponent(title)}&service=${service}`);
+  return fetchJson(`/api/metadata/lookup?title=${encodeURIComponent(title)}&service=${service}`);
 }
 
 export async function searchMetadata(
@@ -121,5 +90,5 @@ export async function searchMetadata(
   service: "goob" | "openl" | "brave" = "brave",
   maxResults: number = 5
 ): Promise<NovelMetadata[]> {
-  return fetchWithFallback(`/api/metadata/search?title=${encodeURIComponent(title)}&service=${service}&max_results=${maxResults}`);
+  return fetchJson(`/api/metadata/search?title=${encodeURIComponent(title)}&service=${service}&max_results=${maxResults}`);
 }

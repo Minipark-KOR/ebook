@@ -1,4 +1,4 @@
-// 프록시 경유 — 동일 오리진, CORS 불필요
+// Same-origin proxy via Next.js app router
 const PRIMARY = "";
 
 export interface Novel {
@@ -91,4 +91,53 @@ export async function searchMetadata(
   maxResults: number = 5
 ): Promise<NovelMetadata[]> {
   return fetchJson(`/api/metadata/search?title=${encodeURIComponent(title)}&service=${service}&max_results=${maxResults}`);
+}
+
+export interface NovelMetadata {
+  title: string;
+  authors: string[];
+  publisher: string | null;
+  year: string | null;
+  isbn13: string | null;
+  isbn10: string | null;
+  language: string | null;
+  coverUrl: string | null;
+  description: string | null;
+  subjects: string[];
+  pageCount: number | null;
+  source: string;
+}
+
+export interface Chapter {
+  wr_id: number;
+  chapter: number;
+  title: string;
+  contentLength: number;
+}
+
+export interface ChapterDetail {
+  wr_id: number;
+  chapter: number;
+  title: string;
+  content: string;
+  images: string[];
+  prevChapter: number | null;
+  nextChapter: number | null;
+}
+
+export interface PaginatedResponse<T> {
+  data: T[];
+  pagination: {
+    page: number;
+    limit: number;
+    total: number;
+  };
+}
+
+export interface Novel {
+  id: string;
+  title: string;
+  author: string;
+  totalChapters: number;
+  coverUrl: string | null;
 }

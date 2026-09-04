@@ -22,9 +22,10 @@
         "name": "next"
       }
     ],
+    "baseUrl": ".",
     "paths": {
-      "@/*": [
-        "./src/*"
+      "@/lib/*": [
+        "./lib/*"
       ]
     }
   },
@@ -37,6 +38,6 @@
   ],
   "exclude": [
     "node_modules",
-    ".next/dev/types"
+    ".next"
   ]
 }

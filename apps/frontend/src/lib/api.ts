@@ -76,8 +76,21 @@ export async function fetchNovels(): Promise<Novel[]> {
   return data.novels;
 }
 
+function normalizeId(id: string): string {
+  try {
+    // 이미 인코딩된 것처럼 보이면(%%XX 패턴) 디코드 후 재인코드
+    if (/%[0-9A-F]{2}/i.test(id)) {
+      return decodeURIComponent(id);
+    }
+  } catch {
+    // 디코드 실패 시 원본 사용
+  }
+  return id;
+}
+
 export async function fetchNovel(id: string): Promise<Novel> {
-  return fetchWithFallback(`/api/novels/${encodeURIComponent(id)}`);
+  const safeId = normalizeId(id);
+  return fetchWithFallback(`/api/novels/${encodeURIComponent(safeId)}`);
 }
 
 export async function fetchChapters(

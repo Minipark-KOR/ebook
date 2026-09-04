@@ -1,12 +1,14 @@
 import type { NextConfig } from "next";
 
+const isProd = process.env.NODE_ENV === "production";
+const backendUrl = process.env.NEXT_PUBLIC_API_URL || "https://devforge.152-69-229-246.nip.io";
+
 const nextConfig: NextConfig = {
-  // 로컬 dev: WSL/로컬에서 OCI 8089로 프록시. 프로덕션에서는 NEXT_PUBLIC_API_URL이 직접 사용됨.
   async rewrites() {
     return [
       {
         source: "/api/:path*",
-        destination: "http://localhost:8089/api/:path*",
+        destination: isProd ? `${backendUrl}/api/:path*` : "http://localhost:8089/api/:path*",
       },
     ];
   },

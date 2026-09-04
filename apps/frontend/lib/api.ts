@@ -52,14 +52,9 @@ export interface NovelMetadata {
 }
 
 async function fetchJson<T>(path: string): Promise<T> {
-  try {
-    const res = await fetch(path, { headers: { "Content-Type": "application/json" } });
-    if (!res.ok) throw new Error(`HTTP ${res.status} ${res.statusText}`);
-    return (await res.json()) as T;
-  } catch (e) {
-    console.error('[api] fetchJson error:', path, e);
-    throw e;
-  }
+  const res = await fetch(path, { headers: { "Content-Type": "application/json" } });
+  if (!res.ok) throw new Error(`HTTP ${res.status} ${res.statusText}`);
+  return (await res.json()) as T;
 }
 
 export async function fetchNovels(): Promise<Novel[]> {
@@ -86,8 +81,12 @@ export async function fetchChapter(wrId: number): Promise<ChapterDetail> {
 export async function fetchMetadata(
   title: string,
   service: "goob" | "openl" | "brave" = "brave"
-): Promise<NovelMetadata> {
-  return fetchJson(`/api/metadata/lookup?title=${encodeURIComponent(title)}&service=${service}`);
+): Promise<NovelMetadata | null> {
+  try {
+    return await fetchJson(`/api/metadata/lookup?title=${encodeURIComponent(title)}&service=${service}`);
+  } catch (e) {
+    return null;
+  }
 }
 
 export async function searchMetadata(

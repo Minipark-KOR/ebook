@@ -37,7 +37,6 @@ export default function NovelPage() {
     setMetadataLoading(true);
     fetchMetadata(novel.title, "brave")
       .then(setMetadata)
-      .catch(() => setMetadata(null)) // Silently fail - metadata is optional
       .finally(() => setMetadataLoading(false));
   }, [novel]);
 

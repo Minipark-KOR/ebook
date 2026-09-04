@@ -8,8 +8,12 @@ export default function Home() {
   const [novels, setNovels] = useState<Novel[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [mounted, setMounted] = useState(false);
 
   useEffect(() => {
+    console.log('[Home] Component mounted');
+    setMounted(true);
+    
     console.log('[Home] fetchNovels start');
     fetchNovels()
       .then((data) => {
@@ -25,6 +29,17 @@ export default function Home() {
         setLoading(false);
       });
   }, []);
+
+  // 렌더링 디버그
+  console.log('[Home] Render:', { loading, error: !!error, novelsCount: novels.length, mounted });
+
+  if (!mounted) {
+    return (
+      <div className="min-h-screen bg-gray-50 dark:bg-gray-900 flex items-center justify-center">
+        <div className="text-gray-500 dark:text-gray-400">하이드레이션 대기 중...</div>
+      </div>
+    );
+  }
 
   if (loading) {
     return (

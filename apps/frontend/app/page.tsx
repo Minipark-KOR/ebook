@@ -10,10 +10,20 @@ export default function Home() {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
+    console.log('[Home] fetchNovels start');
     fetchNovels()
-      .then(setNovels)
-      .catch((err) => setError(err.message))
-      .finally(() => setLoading(false));
+      .then((data) => {
+        console.log('[Home] fetchNovels success', data);
+        setNovels(data);
+      })
+      .catch((err) => {
+        console.error('[Home] fetchNovels error', err);
+        setError(err.message);
+      })
+      .finally(() => {
+        console.log('[Home] fetchNovels finally');
+        setLoading(false);
+      });
   }, []);
 
   if (loading) {

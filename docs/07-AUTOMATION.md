@@ -244,3 +244,26 @@ python3 /opt/workspace/ebooklib/scripts/ebook_watcher/ebook_worker.py
 - [00-ARCHITECTURE.md](00-ARCHITECTURE.md) - 시스템 전체 아키텍처
 - [05-DEPLOYMENT.md](05-DEPLOYMENT.md) - 배포 (systemd 등록 부분)
 - [06-MAINTENANCE.md](06-MAINTENANCE.md) - 운영 작업 가이드
+## 듀얼 SSOT (북토끼 다운 대비)
+
+북토끼는 본문 크롤러, 메타데이터는 문피아/조아라에서 가져옴.
+
+### 역할 분리
+| 출처 | 역할 | 도구 |
+|---|---|---|
+| **북토끼** | 챕터 본문 | `services/bookto31.py` + FlareSolverr |
+| **문피아/조아라** | 메타데이터 SSOT | `scripts/dual_metadata_ssot.py` (Brave Search로 URL 검색) |
+| **namu.wiki** | 표지 이미지 백업 | `services/metadata_namu.py` |
+
+### 북토끼 health check
+- `scripts/bookto31_healthcheck.py` - 독립 CLI (북토끼 + 조아라/문피아 응답 확인)
+- `ebook_worker.py:_check_bookto31_alive()` - 10분 캐시로 15분 사이클마다 자동 호출
+- 죽으면 ebook-watcher가 자동 중단 (recover 안 함, 수동 개입 대기)
+
+### 자동 발견 + 수집 파이프라인
+1. **수동 또는 Brave Search**: `scripts/discover_chapters.py` - 북토끼 작품 메인 페이지에서 spage 순회, 회차 wr_id 자동 추출 → 큐에 일괄 추가
+2. **ebook-watcher**: 15분마다 큐의 챕터를 북토끼에서 fetch
+3. **북토끼 죽음 시**: ebook-watcher가 자동 중단 + 다음 수동 작업 가능
+   - `scripts/discover_chapters.py`의 munpia/joara URL로 직접 fetch
+   - Brave Search로 다른 출처 찾기
+

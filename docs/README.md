@@ -6,10 +6,11 @@
 
 | 파일 | 설명 |
 |------|------|
+| [00-ARCHITELOG.md](00-CHANGELOG.md) | 모든 변경 이력 (2026-09-05) |
 | [00-ARCHITECTURE.md](00-ARCHITECTURE.md) | 시스템 전체 아키텍처 (다이어그램, 모듈, 데이터 흐름) |
 | [01-DATA-PIPELINE.md](01-DATA-PIPELINE.md) | 데이터 수집 → 저장 → API 응답 흐름 |
 | [02-BOT-BYPASS.md](02-BOT-BYPASS.md) | Cloudflare / CloudFront 봇 탐지 우회 전략 |
-| [03-EPUB-GENERATION.md](03-EPUB-GENERATION.md) | EPUB 생성 시스템 (한글 폰트 임베드) |
+| [03-EPUB-GENERATION.md](03-EPUB-GENERATION.md) | EPUB 생성 시스템 (4개 한글 폰트 임베드) |
 | [04-API-REFERENCE.md](04-API-REFERENCE.md) | REST API 엔드포인트 명세 |
 | [05-DEPLOYMENT.md](05-DEPLOYMENT.md) | Vercel + FlareSolverr + 자동화 시스템 배포 |
 | [06-MAINTENANCE.md](06-MAINTENANCE.md) | 운영 중 유지보수 작업 + 자동화 관리 |

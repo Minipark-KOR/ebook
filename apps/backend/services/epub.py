@@ -35,7 +35,7 @@ FONTS_DIR = Path("/opt/workspace/ebooklib/scripts/fonts")
 # 4개 폰트 정의 (filename, font-family name, MIME type)
 FONTS = [
     ("NotoSansKR-Regular.ttf", "NotoSansKR", "application/font-sfnt"),
-    ("RIDIBatang.otf", "RIDIBatang", "application/vnd.openxmlformats-officedocument.font"),
+    ("RIDIBatang.otf", "RIDIBatang", "application/vnd.ms-opentype"),
     ("MaruBuri-Regular.ttf", "MaruBuri", "application/font-sfnt"),
     ("Literata-Variable.ttf", "Literata", "application/font-sfnt"),
 ]

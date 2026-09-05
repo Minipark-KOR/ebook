@@ -33,7 +33,7 @@
 ### 북토끼 health check
 - **`scripts/bookto31_healthcheck.py`**: 북토끼 사이트 상태 체크 (독립 실행 가능)
 - **`ebook_worker.py`**: `_check_bookto31_alive()` 함수 (10분 캐시, 죽으면 ebook-watcher 중단)
-- **북토끼 다운 시 자동 중단 + 대안 소스 시도 (joara)** 가능
+- **북토끼 다운 시 자동 중단** (ebook_worker.py: _check_bookto31_alive() 실패 시 return, joara fallback은 미구현)
 
 ### 표지/회차 라우트 분리
 - **Vercel 빌드 캐시 문제 해결**: catch-all `[...slug]/route.ts`의 함수 변경이 캐시됨
@@ -45,11 +45,11 @@
 
 ### 자동 수집 시스템 (ebook-watcher)
 - **`scripts/ebook_watcher/`** (큐 기반 워커):
-  - `watchdog.py` - 15분마다 큐 체크, ebook-worker 트리거
+  - `watchdog.py` - 1분마다 큐 체크, ebook-worker 트리거 (내부 TRIGGER_INTERVAL_SEC=60)
   - `ebook_worker.py` - 북토끼에서 챕터 fetch → DB 저장 → Neon 동기화
   - `ebook_queue.py` - CLI 큐 관리 (add/list/remove)
 - **북토끼 health check** 통합: 죽으면 자동 중단
-- **CHAPTER_DELAY_SEC**: 기본 5분, 임시 1분 (대량 수집용, 수집 완료 후 5분 복원 권장)
+- **CHAPTER_DELAY_SEC**: 1분 고정 (코드 48행: `CHAPTER_DELAY_SEC = 60`)
 - **큐 형식**: `[{"wr_id": 12345, "novel_title": "제목", "priority": 1-5, "added_at": "..."}]`
 
 ### 챕터 자동 발견 스크립트
@@ -115,11 +115,11 @@ namu.wiki (namu.wiki)        → 표지 이미지 백업
 5. **갱신**: ebook_watcher가 챕터 저장 후 → Vercel revalidate API 호출 (즉시)
 6. **EPUB**: 사용자 요청 시 build_epub() → 4개 폰트 + 챕터 HTML
 
-### 보호 계층
-- **3중 자동화 보호**:
-  - `ebook-watcher.timer (*:0/15)` - 15분마다 자동 트리거
-  - `devforge-watchdog` (60초마다) - 서비스 죽으면 자동 재시작
-  - `Restart=on-failure` SystemD - ebook-api 충돌 시 재시작
+### 보호 계층 (4중)
+- **Layer 3**: `ebook-watcher.timer (*:0/15)` - 15분마다 자동 트리거
+- **Layer 2**: `ebook-watcher.service` - Restart=always (systemd)
+- **Layer 1**: `devforge-watchdog` (60초마다) - 서비스 죽으면 자동 재시작
+- **Layer 0**: `systemd Restart=always` - watchdog도 자동 재시작
 
 ## 핵심 파일 위치
 - **백엔드**: `/opt/workspace/ebooklib/apps/backend/`
@@ -145,6 +145,6 @@ namu.wiki (namu.wiki)        → 표지 이미지 백업
 ## 현재 ebooklib 상태 (4개 소설)
 - **하남자의 탑 공략법** (557화, 완결, 작가=꾸찌꾸찌)
 - **오늘만 사는 기사** (1화, 신규, 작가=미상, munpia_url + joara_url)
-- **게임 속 바바리안** (1화, 신규, 작가=미상, munpia_url + joara_url)
+- **게임 속 바바리안으로 살아남기** (1화, 신규, 작가=미상, munpia_url + joara_url)
 - **화산귀환** (1화, 신규, 작가=태존비록, munpia_url + joara_url)
-- 839챕터 큐에 있음 (오늘만 사는 기사, ebook-watcher가 점진 수집 중)
+- 2개 테스트 아이템 큐에 있음 (839챕터는 discover_chapters.py 미실행으로 큐 미추가)

@@ -44,8 +44,7 @@ LOG_FILE = WATCHER_DIR / 'watcher.log'
 LOCK_FILE = WATCHER_DIR / 'worker.lock'
 
 # 챕터 간 안전 지연 (북토끼가 클라이언트로 인식하지 않도록)
-# 일시적으로 단축: 5분 → 1분 (대량 수집 후 다시 5분으로 복원)
-CHAPTER_DELAY_SEC = 60  # 1분
+CHAPTER_DELAY_SEC = 300  # 5분
 # 같은 URL에 다시 요청 시 대기 시간
 URL_RETRY_DELAY_SEC = 120  # 2분
 
@@ -229,7 +228,12 @@ BOOKTO31_CHECK_INTERVAL = 600  # 10분마다 health check
 
 
 def _check_bookto31_alive() -> bool:
-    """북토끼 health check (캐시: 10분마다 한 번만)."""
+    """북토끼 health check (캐시: 10분마다 한 번만).
+
+    bookto31._fetch_with_flaresolverr(rate_limit=False)를 사용해
+    Cloudflare 우회 후 판단. rate_limit=False: health check는
+    실제 데이터 수집이 아니므로 rate limiter를 우회한다.
+    """
     global _BOOKTO31_LAST_CHECK, _BOOKTO31_LAST_OK
     now = time.time()
     if now - _BOOKTO31_LAST_CHECK < BOOKTO31_CHECK_INTERVAL:
@@ -237,13 +241,9 @@ def _check_bookto31_alive() -> bool:
     _BOOKTO31_LAST_CHECK = now
 
     try:
-        import requests as _req
-        resp = _req.get(
-            "https://bookto31.com/",
-            timeout=10,
-            headers={"User-Agent": "Mozilla/5.0"},
-        )
-        _BOOKTO31_LAST_OK = resp.status_code == 200
+        from services import bookto31
+        html = bookto31._fetch_with_flaresolverr(bookto31.BASE_URL + "/", rate_limit=False)
+        _BOOKTO31_LAST_OK = html is not None and len(html) > 1000
     except Exception:
         _BOOKTO31_LAST_OK = False
 
@@ -475,10 +475,10 @@ def process_queue() -> dict:
             log.info(f"  {CHAPTER_DELAY_SEC}초 안전 대기...")
             time.sleep(CHAPTER_DELAY_SEC)
 
-    # 실패한 챕터만 큐에 남김
-    remaining = [item for item in queue if item.get('attempts', 0) < 5 and not any(
+    # 실패+재시도 가능한 챕터만 큐에 남김 (성공한 챕터는 제거)
+    remaining = [item for item in queue if any(
         e['wr_id'] == item['wr_id'] for e in errors
-    )]
+    ) and item.get('attempts', 0) < 5]
     save_queue(remaining)
 
     return {"processed": processed, "errors": errors, "remaining": len(remaining)}

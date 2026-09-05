@@ -1,47 +1,30 @@
-"use client";
-
-import { useEffect, useState } from "react";
 import Image from "next/image";
 import Link from "next/link";
-import { fetchNovels, Novel } from "@/lib/api";
+import { Novel } from "@/lib/api";
 
-export default function Home() {
-  const [novels, setNovels] = useState<Novel[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-  const [mounted, setMounted] = useState(false);
+// devforge 백엔드 API 직접 호출 (Vercel → nip.io → devforge)
+const API_BASE = process.env.NEXT_PUBLIC_API_URL
+  ? `${process.env.NEXT_PUBLIC_API_URL}/api`
+  : "https://devforge.152-69-229-246.nip.io/api";
 
-  useEffect(() => {
-    setMounted(true);
-    fetchNovels()
-      .then(setNovels)
-      .catch((err) => setError(err.message))
-      .finally(() => setLoading(false));
-  }, []);
+// 5분마다 자동 갱신 (ISR: Incremental Static Regeneration)
+export const revalidate = 300;
 
-  if (!mounted) {
-    return (
-      <div className="min-h-screen bg-gray-50 dark:bg-gray-900 flex items-center justify-center">
-        <div className="text-gray-500 dark:text-gray-400">하이드레이션 대기 중...</div>
-      </div>
-    );
+async function fetchNovelsServer(): Promise<Novel[]> {
+  const res = await fetch(`${API_BASE}/novels`, {
+    next: { revalidate: 300, tags: ["novels"] },
+    headers: { "Content-Type": "application/json" },
+  });
+  if (!res.ok) {
+    console.error(`Failed to fetch novels: ${res.status}`);
+    return [];
   }
+  const data = await res.json();
+  return data.novels || [];
+}
 
-  if (loading) {
-    return (
-      <div className="min-h-screen bg-gray-50 dark:bg-gray-900 flex items-center justify-center">
-        <div className="text-gray-500 dark:text-gray-400">로딩 중...</div>
-      </div>
-    );
-  }
-
-  if (error) {
-    return (
-      <div className="min-h-screen bg-gray-50 dark:bg-gray-900 flex items-center justify-center">
-        <div className="text-red-500">에러: {error}</div>
-      </div>
-    );
-  }
+export default async function Home() {
+  const novels = await fetchNovelsServer();
 
   return (
     <div className="min-h-screen bg-gray-50 dark:bg-gray-900">

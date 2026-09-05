@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import Image from "next/image";
 import Link from "next/link";
 import { useParams, useSearchParams, useRouter } from "next/navigation";
 import { fetchNovel, fetchChapters, fetchMetadata, Novel, Chapter, NovelMetadata } from "@/lib/api";

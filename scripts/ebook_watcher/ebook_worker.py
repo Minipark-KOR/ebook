@@ -223,6 +223,35 @@ def parse_novel_meta_safe(html: str) -> Dict:
         return {}
 
 
+_BOOKTO31_LAST_CHECK = 0
+_BOOKTO31_LAST_OK = True
+BOOKTO31_CHECK_INTERVAL = 600  # 10분마다 health check
+
+
+def _check_bookto31_alive() -> bool:
+    """북토끼 health check (캐시: 10분마다 한 번만)."""
+    global _BOOKTO31_LAST_CHECK, _BOOKTO31_LAST_OK
+    now = time.time()
+    if now - _BOOKTO31_LAST_CHECK < BOOKTO31_CHECK_INTERVAL:
+        return _BOOKTO31_LAST_OK
+    _BOOKTO31_LAST_CHECK = now
+
+    try:
+        import requests as _req
+        resp = _req.get(
+            "https://bookto31.com/",
+            timeout=10,
+            headers={"User-Agent": "Mozilla/5.0"},
+        )
+        _BOOKTO31_LAST_OK = resp.status_code == 200
+    except Exception:
+        _BOOKTO31_LAST_OK = False
+
+    if not _BOOKTO31_LAST_OK:
+        log.error("북토끼 health check 실패! 챕터 수집 중단")
+    return _BOOKTO31_LAST_OK
+
+
 def save_chapter(wr_id: int, novel_title: str, body: str) -> bool:
     """챕터 본문을 DB에 저장."""
     import json as _json
@@ -400,6 +429,11 @@ def enrich_metadata_from_namu(novel_id: str, novel_title: str) -> dict:
 
 def process_queue() -> dict:
     """큐의 모든 챕터를 순차 처리 (안전 지연 포함)."""
+    # 북토끼 health check (죽었으면 조기 종료)
+    if not _check_bookto31_alive():
+        log.error("북토끼 다운! 대안 소스 또는 북토끼 복구 대기 필요")
+        return {"processed": 0, "errors": ["bookto31_down"]}
+
     queue = load_queue()
     if not queue:
         log.info("큐 비어 있음")

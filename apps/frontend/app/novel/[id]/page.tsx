@@ -126,52 +126,37 @@ export default function NovelPage() {
 
         {/* Novel Header with Metadata */}
         <div className="mb-8">
-          <div className="flex flex-col md:flex-row gap-6">
-            {/* 표지 이미지 */}
-            {novel.coverUrl && (
-              <div className="flex-shrink-0">
-                {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img
-                  src={novel.coverUrl}
-                  alt={novel.title}
-                  className="w-48 h-auto rounded-lg shadow-md object-cover"
-                />
-              </div>
+          <h1 className="text-3xl font-bold text-gray-900 dark:text-white mb-2">
+            {novel.title}
+          </h1>
+          <p className="text-lg text-gray-700 dark:text-gray-300 mb-2">
+            {novel.author}
+          </p>
+          <div className="flex flex-wrap gap-2 mb-4">
+            {novel.genre?.map((g, i) => (
+              <span
+                key={i}
+                className="px-2 py-1 bg-blue-100 dark:bg-blue-900 text-blue-800 dark:text-blue-200 text-xs rounded"
+              >
+                {g}
+              </span>
+            ))}
+            {novel.status && novel.status !== "unknown" && (
+              <span className="px-2 py-1 bg-green-100 dark:bg-green-900 text-green-800 dark:text-green-200 text-xs rounded">
+                {novel.status}
+              </span>
             )}
-            <div className="flex-1">
-              <h1 className="text-3xl font-bold text-gray-900 dark:text-white mb-2">
-                {novel.title}
-              </h1>
-              <p className="text-lg text-gray-700 dark:text-gray-300 mb-2">
-                {novel.author}
-              </p>
-              <div className="flex flex-wrap gap-2 mb-4">
-                {novel.genre?.map((g, i) => (
-                  <span
-                    key={i}
-                    className="px-2 py-1 bg-blue-100 dark:bg-blue-900 text-blue-800 dark:text-blue-200 text-xs rounded"
-                  >
-                    {g}
-                  </span>
-                ))}
-                {novel.status && novel.status !== "unknown" && (
-                  <span className="px-2 py-1 bg-green-100 dark:bg-green-900 text-green-800 dark:text-green-200 text-xs rounded">
-                    {novel.status}
-                  </span>
-                )}
-              </div>
-              {/* 표지 아래로 EPUB 다운로드 버튼 - 우측 정렬 */}
-              <div className="flex justify-end">
-                <a
-                  href={`/api/novels/${encodeURIComponent(novelId)}/epub`}
-                  download
-                  className="px-4 py-2 bg-green-600 text-white rounded hover:bg-green-700"
-                >
-                  EPUB 다운로드
-                </a>
-              </div>
-            </div>
           </div>
+          <div className="flex justify-end">
+            <a
+              href={`/api/novels/${encodeURIComponent(novelId)}/epub`}
+              download
+              className="px-4 py-2 bg-green-600 text-white rounded hover:bg-green-700"
+            >
+              EPUB 다운로드
+            </a>
+          </div>
+        </div>
           
           {/* Metadata Info Cards */}
           {metadata && (
@@ -212,28 +197,6 @@ export default function NovelPage() {
                   <p className="font-medium text-gray-900 dark:text-white">{metadata.pageCount.toLocaleString()}쪽</p>
                 </div>
               )}
-            </div>
-          )}
-
-          {/* Description */}
-          {(metadata?.description || novel.description) && (
-            <div className="bg-white dark:bg-gray-800 p-4 rounded-lg shadow mb-6">
-              <p className="text-sm text-gray-500 dark:text-gray-400 mb-2">
-                줄거리
-                {novel.namuUrl && (
-                  <a
-                    href={novel.namuUrl}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="ml-2 text-xs text-blue-600 dark:text-blue-400 hover:underline"
-                  >
-                    (출처: namu.wiki ↗)
-                  </a>
-                )}
-              </p>
-              <p className="text-gray-700 dark:text-gray-300 whitespace-pre-wrap">
-                {novel.description || metadata?.description}
-              </p>
             </div>
           )}
 

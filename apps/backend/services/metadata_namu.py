@@ -293,10 +293,11 @@ def _extract_metadata_from_html(html: str) -> NamuMetadata:
 
     # 방법 2: og:description에서 작가/장르 추출 (백업)
     if not meta.author and meta.description:
-        # "작가는 XXX" 패턴
-        author_m = re.search(r'작가는\s+([^.,]+?)(?:\s|,|\.|$)', meta.description)
-        if author_m:
-            meta.author = author_m.group(1).strip()
+        # "작가는 XXX" 패턴 - 단, 다른 책 제목이 잡힐 수 있어 신중하게
+        # namu.wiki는 작가 항목이 별도로 있으면 그게 우선 (위에서 추출됨)
+        # og:description의 "작가는 X"는 부정확할 수 있어 추출 안 함
+        # 사용자가 북토끼/문피아에서 직접 확인 권장
+        pass
 
     if not meta.genre and meta.description:
         # "한국의 XXX 웹소설" 패턴

@@ -25,6 +25,7 @@ import time
 import logging
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from typing import Dict, List, Tuple
 
 # ebooklib 백엔드 경로 추가
 sys.path.insert(0, '/opt/workspace/ebooklib/apps/backend')
@@ -145,13 +146,23 @@ def release_lock() -> None:
         pass
 
 
-def fetch_with_retry(wr_id: int, max_retries: int = 3) -> tuple[bool, str, str]:
+def fetch_with_retry(wr_id: int, max_retries: int = 3, target_chapter: int = None) -> tuple[bool, str, str]:
     """북토끼에서 챕터 본문 가져오기 (재시도 포함).
+
+    작품 메인 페이지인 경우 자동으로 회차 wr_id를 찾아 본문 추출.
+
+    Args:
+        wr_id: 북토끼 wr_id
+        max_retries: 재시도 횟수
+        target_chapter: 작품 메인일 때 찾을 회차 번호 (None이면 1화)
 
     Returns:
         (성공여부, 본문, 에러메시지)
     """
-    from services.bookto31 import fetch_chapter, parse_chapter_body
+    from services.bookto31 import (
+        fetch_chapter, parse_chapter_body, is_novel_index_page,
+        find_chapter_wr_id, extract_chapter_wr_ids_from_index,
+    )
 
     for attempt in range(1, max_retries + 1):
         try:
@@ -161,6 +172,29 @@ def fetch_with_retry(wr_id: int, max_retries: int = 3) -> tuple[bool, str, str]:
                 log.warning(f"  fetch 실패 (None 반환)")
                 if attempt < max_retries:
                     time.sleep(URL_RETRY_DELAY_SEC)
+                continue
+
+            # 작품 메인 페이지인 경우 - 회차 wr_id 찾아서 본문 추출
+            if is_novel_index_page(html):
+                # 메타데이터 추출
+                meta = parse_novel_meta_safe(html)
+                log.info(f"  작품 메인 페이지 감지: {meta.get('title', '?')}")
+                # 회차 목록 추출
+                chapter_list = extract_chapter_wr_ids_from_index(html)
+                log.info(f"  작품 메인에서 {len(chapter_list)}개 회차 발견")
+                # target_chapter 찾기
+                if target_chapter is None:
+                    target_chapter = 1
+                actual_wr_id = find_chapter_wr_id(html, wr_id, target_chapter)
+                if not actual_wr_id:
+                    return False, "", f"회차 {target_chapter}를 작품 메인에서 찾을 수 없음"
+                log.info(f"  {target_chapter}화 wr_id={actual_wr_id}로 다시 fetch")
+                # 찾은 wr_id로 다시 fetch (rate_limit 추가 안 됨, 같은 URL이 아니므로)
+                html = fetch_chapter(actual_wr_id)
+                if not html:
+                    return False, "", f"회차 fetch 실패"
+
+            if not html:
                 continue
 
             body = parse_chapter_body(html)
@@ -177,6 +211,15 @@ def fetch_with_retry(wr_id: int, max_retries: int = 3) -> tuple[bool, str, str]:
                 time.sleep(URL_RETRY_DELAY_SEC)
 
     return False, "", f"{max_retries}회 시도 후 실패"
+
+
+def parse_novel_meta_safe(html: str) -> Dict:
+    """bookto31의 parse_novel_meta 안전 호출."""
+    try:
+        from services.bookto31 import parse_novel_meta
+        return parse_novel_meta(html)
+    except Exception:
+        return {}
 
 
 def save_chapter(wr_id: int, novel_title: str, body: str) -> bool:
@@ -237,6 +280,19 @@ def save_chapter(wr_id: int, novel_title: str, body: str) -> bool:
         }
         with open(meta_file, 'w', encoding='utf-8') as f:
             _json.dump(meta, f, ensure_ascii=False, indent=2)
+    else:
+        # 기존 meta 업데이트 - totalChapters 카운트
+        try:
+            with open(meta_file, 'r', encoding='utf-8') as f:
+                meta = _json.load(f)
+            chapter_files = list(novel_dir.glob('*.json'))
+            chapter_count = sum(1 for f in chapter_files if f.stem.isdigit())
+            if meta.get('totalChapters', 0) < chapter_count:
+                meta['totalChapters'] = chapter_count
+                with open(meta_file, 'w', encoding='utf-8') as f:
+                    _json.dump(meta, f, ensure_ascii=False, indent=2)
+        except Exception as e:
+            log.warning(f"meta.json 업데이트 실패: {e}")
 
     log.info(f"  저장 완료: {chapter_file} ({len(body)} chars)")
     return True

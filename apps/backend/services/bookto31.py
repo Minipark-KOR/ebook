@@ -19,7 +19,7 @@ FlareSolverr 응답 구조 (FlareSolverr v3.x):
 import threading
 import time
 from pathlib import Path
-from typing import Optional, Union, List, Dict
+from typing import Optional, Union, List, Dict, Tuple
 
 import requests
 
@@ -278,6 +278,100 @@ def parse_chapter_body(html: str) -> str:
     clean = re.sub(r"<[^>]+>", "\n", clean)
     clean = re.sub(r"\n\s*\n", "\n", clean)
     return clean.strip()
+
+
+def is_novel_index_page(html: str) -> bool:
+    """HTML이 작품 메인 페이지인지 판단.
+
+    작품 메인: 회차 목록만 있고 본문이 짧음 (< 1000자)
+    회차 페이지: view-content book-text-viewer 또는 긴 본문
+    """
+    if "view-content book-text-viewer" in html:
+        return False
+    body = parse_chapter_body(html)
+    if body and len(body) > 500:
+        return False
+    return True
+
+
+def extract_chapter_wr_ids_from_index(html: str) -> List[Tuple[int, int]]:
+    """작품 메인 페이지에서 (wr_id, chapter_num) 추출.
+
+    북토끼/APMS 회차 nav는 item-subject 클래스 안에:
+    - <a href="...wr_id=N..." class="item-subject">
+    -     <span class="orangered">...</span>
+    -     오늘만 사는 기사 - 839화
+    -     <span class="count">N</span>
+    -   </a>
+
+    Returns:
+        [(wr_id, chapter_number), ...]
+    """
+    import re
+
+    # 패턴: <a ... class="item-subject" ... href="...wr_id=N&...">
+    # HTML 엔티티(&amp;) 처리 위해 amp; 옵션 추가
+    pattern = re.compile(
+        r'<a[^>]*?(?:class="item-subject"[^>]*?)?'
+        r'href="[^"]*(?:&amp;)?wr_id=(\d+)[^"]*"'
+        r'[^>]*?(?:class="item-subject"[^>]*?)?>(.*?)</a>',
+        re.DOTALL,
+    )
+    matches = []
+    for m in pattern.finditer(html):
+        wr_id = int(m.group(1))
+        inner = m.group(2)
+        # HTML 태그 제거 후 회차 번호 추출
+        text = re.sub(r'<[^>]+>', ' ', inner)
+        text = re.sub(r'\s+', ' ', text).strip()
+        ep_match = re.search(r'(\d+)(?:화|편|장)', text)
+        if ep_match:
+            chapter = int(ep_match.group(1))
+            # 작품 메인 자신의 wr_id는 제외
+            # (실제 회차 wr_id는 spage=1 등 추가 파라미터 있음)
+            matches.append((wr_id, chapter))
+
+    # 중복 제거 (순서 유지)
+    seen = set()
+    unique = []
+    for wr_id, ch in matches:
+        if wr_id not in seen:
+            seen.add(wr_id)
+            unique.append((wr_id, ch))
+    return unique
+
+
+def find_chapter_wr_id(html: str, novel_main_wr_id: int, chapter_num: int) -> Optional[int]:
+    """작품 메인 페이지에서 특정 회차 번호의 wr_id를 찾는다.
+
+    Args:
+        html: 작품 메인 페이지 HTML
+        novel_main_wr_id: 작품 메인 페이지의 wr_id (제외용)
+        chapter_num: 찾을 회차 번호
+
+    Returns:
+        회차 wr_id 또는 None
+    """
+    import re
+
+    pattern = re.compile(
+        r'<a[^>]*?(?:class="item-subject"[^>]*?)?'
+        r'href="[^"]*(?:&amp;)?wr_id=(\d+)[^"]*"'
+        r'[^>]*?(?:class="item-subject"[^>]*?)?>(.*?)</a>',
+        re.DOTALL,
+    )
+    for m in pattern.finditer(html):
+        wr_id = int(m.group(1))
+        if wr_id == novel_main_wr_id:
+            continue
+        inner = m.group(2)
+        text = re.sub(r'<[^>]+>', ' ', inner)
+        text = re.sub(r'\s+', ' ', text).strip()
+        ep_match = re.search(rf'{chapter_num}\s*(?:화|편|장)', text)
+        if ep_match:
+            return wr_id
+
+    return None
 
 
 def parse_novel_meta(html: str) -> Dict:

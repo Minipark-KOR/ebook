@@ -265,7 +265,7 @@ ebooklib은 한국 웹소설을 자동으로 수집 → DB 저장 → EPUB으로
 - **문피아** (munpia.com) - **메타데이터** SSOT (Brave Search로 URL 검색)
 - **조아라** (joara.com) - **메타데이터** SSOT (보조)
 - **namu.wiki** - **표지 이미지** 백업
-- **Neon** (PostgreSQL 18.6) - Vercel 측 직접 조회 DB
+- **Neon** (PostgreSQL 16) - Vercel 측 직접 조회 DB
 - **4개 한글 폰트** - NotoSansKR (제목), RIDIBatang (본문), MaruBuri (인용), Literata (영문)
 
 ---

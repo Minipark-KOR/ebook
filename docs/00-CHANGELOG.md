@@ -110,7 +110,7 @@ namu.wiki (namu.wiki)        → 표지 이미지 백업
 ### 데이터 흐름
 1. **수집**: ebook-watcher (15분마다) → 북토끼에서 챕터 본문 + namu.wiki에서 표지/메타
 2. **저장**: 로컬 JSON (`/opt/ai_data/flaresolverr/novels/{소설ID}/`)
-3. **동기화**: ebook_sync.py → Neon DB UPSERT (PostgreSQL 18.6)
+3. **동기화**: ebook_sync.py → Neon DB UPSERT (PostgreSQL 16)
 4. **표시**: Vercel → Neon 직접 query (Edge runtime) → 200-500ms 응답
 5. **갱신**: ebook_watcher가 챕터 저장 후 → Vercel revalidate API 호출 (즉시)
 6. **EPUB**: 사용자 요청 시 build_epub() → 4개 폰트 + 챕터 HTML

@@ -6,7 +6,7 @@
 
 | 파일 | 설명 |
 |------|------|
-| [00-ARCHITELOG.md](00-CHANGELOG.md) | 모든 변경 이력 (2026-09-05) |
+| [00-CHANGELOG.md](00-CHANGELOG.md) | 모든 변경 이력 (2026-09-05) |
 | [00-ARCHITECTURE.md](00-ARCHITECTURE.md) | 시스템 전체 아키텍처 (다이어그램, 모듈, 데이터 흐름) |
 | [01-DATA-PIPELINE.md](01-DATA-PIPELINE.md) | 데이터 수집 → 저장 → API 응답 흐름 |
 | [02-BOT-BYPASS.md](02-BOT-BYPASS.md) | Cloudflare / CloudFront 봇 탐지 우회 전략 |

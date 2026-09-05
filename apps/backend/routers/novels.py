@@ -96,18 +96,22 @@ async def download_epub(novel_id: str):
     DB의 모든 챕터를 모아서 EPUB 파일을 생성하고 다운로드.
     한글 깨짐 방지용 GoNoto 폰트가 임베드됨.
     """
-    novel = get_novel_detail(novel_id)
+    # URL의 한글 novel_id는 공백으로 들어옴 - DB는 언더스코 버전 사용
+    # novel_id 예: "하남자의 탑 공략법" (URL) → "하남자의_탑_공략법" (DB)
+    novel_id_db = novel_id.replace(" ", "_")
+
+    novel = get_novel_detail(novel_id_db)
     if not novel:
         raise HTTPException(status_code=404, detail="Novel not found")
 
-    epub_bytes = build_epub(novel_id)
+    epub_bytes = build_epub(novel_id_db)
     if not epub_bytes:
         raise HTTPException(
             status_code=500,
             detail="EPUB 생성 실패 (챕터 데이터 없음)",
         )
 
-    title = get_novel_title(novel_id)
+    title = get_novel_title(novel_id_db)
     filename = f"{title}.epub"
 
     return Response(

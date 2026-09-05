@@ -6,10 +6,25 @@
 
 ## 핵심 요약
 - 북토끼(bookto31.com) 등 Cloudflare 보호 사이트의 한국 웹소설 챕터를 자동 수집
+- **자동화 워치독** (ebook-watcher): 큐에 추가하면 15분마다 자동 수집, devforge-watchdog이 죽으면 자동 복구
 - 로컬 JSON DB에 저장 (`/opt/ai_data/flaresolverr/novels/`)
 - FastAPI 백엔드 + Next.js 프론트엔드를 Vercel Monorepo로 단일 배포
 - EPUB 다운로드 지원 (한글 폰트 임베드, 어디서나 읽기 가능)
 - 봇 차단 우회: FlareSolverr (헤드리스 브라우저), rate limiter (8분 + ±2분)
+
+## 챕터 자동 수집 (간단 사용법)
+
+```bash
+# 큐에 챕터 추가
+python3 scripts/ebook_watcher/ebook_queue.py add 25575 "오늘만 사는 기사"
+
+# 큐 확인
+python3 scripts/ebook_watcher/ebook_queue.py list
+
+# 15분마다 ebook-watcher.timer가 자동 실행
+# 북토끼 5분 챕터 간 안전 지연 + 재시도 3회
+# 실패 시 attempts 카운트, 5회까지 큐 유지
+```
 
 ## 구조
 

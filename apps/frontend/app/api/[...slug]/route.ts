@@ -212,8 +212,8 @@ async function proxy(req: NextRequest, slug: string[]) {
   return response;
 }
 
-// Edge runtime - Neon DB 빠른 조회
-export const runtime = 'edge';
+// Node.js runtime - 외부 fetch(표지) + DB 쿼리 모두 지원
+export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 type Props = { params: Promise<{ slug: string[] }> };

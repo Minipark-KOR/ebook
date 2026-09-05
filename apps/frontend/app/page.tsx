@@ -59,8 +59,18 @@ export default async function Home() {
                   </div>
                 )}
                 {novel.status && novel.status !== "unknown" && (
-                  <span className="absolute top-2 right-2 px-2 py-1 bg-blue-600 text-white text-xs rounded">
+                  <span
+                    className={
+                      "absolute top-2 right-2 px-2 py-1 text-white text-xs rounded " +
+                      (novel.status === "완결"
+                        ? "bg-gray-700"
+                        : novel.status === "단편"
+                        ? "bg-purple-600"
+                        : "bg-blue-600")
+                    }
+                  >
                     {novel.status}
+                    {novel.status === "완결" && " (완)"}
                   </span>
                 )}
               </div>

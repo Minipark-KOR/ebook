@@ -18,6 +18,7 @@ FlareSolverr 응답 구조 (FlareSolverr v3.x):
 
 import threading
 import time
+from pathlib import Path
 from typing import Optional, Union, List, Dict
 
 import requests
@@ -26,6 +27,85 @@ import requests
 BASE_URL = "https://bookto31.com"
 FLARESOLVERR_URL = "http://127.0.0.1:8191/v1"
 DEFAULT_TIMEOUT_MS = 60000
+
+# Rate limiter (Cloudflare 차단 회피: 8분 간격 + ±2분 jitter)
+_RATE_LIMITER_PATH = Path("/opt/ai_data/flaresolverr/rate_limiter.db")
+_BOOKTO31_INTERVAL = 480  # 8분
+_BOOKTO31_JITTER = 120  # ±2분
+
+
+def _rate_limit_check(url: str) -> None:
+    """북토끼 요청 시 rate limit 적용.
+
+    같은 URL에 마지막 요청 이후 8분 + 0~2분이 지나야 통과.
+    """
+    try:
+        # lib 패키지가 있으면 사용, 없으면 인라인 구현
+        from lib.rate_limiter import wait_if_needed, record_request
+        wait_sec = wait_if_needed(url, interval=_BOOKTO31_INTERVAL, db_path=_RATE_LIMITER_PATH)
+        if wait_sec > 0:
+            import asyncio
+            try:
+                asyncio.get_event_loop().run_until_complete(asyncio.sleep(0))
+            except RuntimeError:
+                pass
+            import time as _time
+            _time.sleep(wait_sec)
+    except ImportError:
+        # lib 패키지 없으면 인라인 구현
+        _inline_rate_limit(url)
+
+
+def _inline_rate_limit(url: str) -> None:
+    """rate_limiter 모듈 없을 때 폴백."""
+    import sqlite3
+    import random
+    try:
+        _RATE_LIMITER_PATH.parent.mkdir(parents=True, exist_ok=True)
+        conn = sqlite3.connect(str(_RATE_LIMITER_PATH))
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS request_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                url TEXT NOT NULL,
+                status INTEGER,
+                ts REAL NOT NULL
+            )
+        """)
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_url_ts ON request_log(url, ts DESC)")
+        row = conn.execute(
+            "SELECT ts FROM request_log WHERE url = ? ORDER BY ts DESC LIMIT 1",
+            (url,),
+        ).fetchone()
+        if row:
+            elapsed = time.time() - row[0]
+            if elapsed < _BOOKTO31_INTERVAL:
+                wait = (_BOOKTO31_INTERVAL - elapsed) + random.uniform(0, _BOOKTO31_JITTER)
+                print(f"[rate_limit] waiting {wait:.0f}s for {url}", flush=True)
+                time.sleep(wait)
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+
+def _rate_limit_record(url: str, status: int = 200) -> None:
+    """북토끼 요청 후 기록."""
+    try:
+        from lib.rate_limiter import record_request
+        record_request(url, status=status, db_path=_RATE_LIMITER_PATH)
+    except ImportError:
+        try:
+            import sqlite3
+            conn = sqlite3.connect(str(_RATE_LIMITER_PATH))
+            conn.execute(
+                "INSERT INTO request_log (url, status, ts) VALUES (?, ?, ?)",
+                (url, status, time.time()),
+            )
+            conn.commit()
+            conn.close()
+        except Exception as e:
+            pass
 
 
 _session_lock = threading.Lock()
@@ -93,8 +173,14 @@ def _update_session_state(sol: Dict) -> bool:
     return True
 
 
-def _fetch_with_flaresolverr(url: str, max_attempts: int = 3) -> Optional[str]:
-    """FlareSolverr 통해 URL의 HTML 본문을 가져온다. None이면 실패."""
+def _fetch_with_flaresolverr(url: str, max_attempts: int = 3, rate_limit: bool = True) -> Optional[str]:
+    """FlareSolverr 통해 URL의 HTML 본문을 가져온다. None이면 실패.
+
+    rate_limit=True (기본): 8분 간격 + ±2분 jitter로 같은 URL 도배 방지.
+    rate_limit=False: 챕터 일괄 수집 시 이미 제한된 상태에서 호출.
+    """
+    if rate_limit:
+        _rate_limit_check(url)
     for attempt in range(max_attempts):
         try:
             sol = _flaresolverr_request(url)
@@ -103,9 +189,13 @@ def _fetch_with_flaresolverr(url: str, max_attempts: int = 3) -> Optional[str]:
             continue
         if sol.get("status") == 200:
             _update_session_state(sol)
+            if rate_limit:
+                _rate_limit_record(url, status=200)
             return sol.get("response") or ""
         # challenge 해결 실패시 재시도
         time.sleep(2)
+    if rate_limit:
+        _rate_limit_record(url, status=403)
     return None
 
 

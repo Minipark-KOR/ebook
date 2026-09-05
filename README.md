@@ -2,6 +2,15 @@
 
 웹소설 수집/변환/읽기 통합 프로젝트 (Monorepo 구조)
 
+> 📚 **상세 문서**: [`docs/`](docs/README.md) 디렉토리에 시스템 전체 설명이 있습니다.
+
+## 핵심 요약
+- 북토끼(bookto31.com) 등 Cloudflare 보호 사이트의 한국 웹소설 챕터를 자동 수집
+- 로컬 JSON DB에 저장 (`/opt/ai_data/flaresolverr/novels/`)
+- FastAPI 백엔드 + Next.js 프론트엔드를 Vercel Monorepo로 단일 배포
+- EPUB 다운로드 지원 (한글 폰트 임베드, 어디서나 읽기 가능)
+- 봇 차단 우회: FlareSolverr (헤드리스 브라우저), rate limiter (8분 + ±2분)
+
 ## 구조
 
 ```

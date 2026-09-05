@@ -265,8 +265,10 @@ def save_chapter(wr_id: int, novel_title: str, body: str) -> bool:
         _json.dump(data, f, ensure_ascii=False, indent=2)
 
     # meta.json 생성/업데이트 (소설 첫 챕터인 경우)
+    new_novel = False
     meta_file = novel_dir / 'meta.json'
     if not meta_file.exists():
+        new_novel = True
         # 새 소설 - namu.wiki로 메타데이터 자동 보강
         meta = enrich_metadata_from_namu(novel_id, novel_title)
         with open(meta_file, 'w', encoding='utf-8') as f:
@@ -286,7 +288,51 @@ def save_chapter(wr_id: int, novel_title: str, body: str) -> bool:
             log.warning(f"meta.json 업데이트 실패: {e}")
 
     log.info(f"  저장 완료: {chapter_file} ({len(body)} chars)")
+
+    # Vercel 캐시 즉시 갱신 트리거
+    _trigger_vercel_revalidate(novel_id, new_novel)
+
     return True
+
+
+def _trigger_vercel_revalidate(novel_id: str, is_new_novel: bool = False) -> None:
+    """Vercel ISR 캐시 즉시 갱신.
+
+    새 챕터 저장 시 Vercel의 revalidate endpoint 호출.
+    환경변수:
+    - VERCEL_REVALIDATE_URL: 예) https://miniebook.vercel.app/api/revalidate
+    - VERCEL_REVALIDATE_TOKEN: Vercel 측 env에 설정한 토큰
+    """
+    import os
+    import requests as req
+
+    url = os.getenv("VERCEL_REVALIDATE_URL", "").strip()
+    token = os.getenv("VERCEL_REVALIDATE_TOKEN", "").strip()
+
+    if not url or not token:
+        # 설정 없으면 조용히 스킵 (devforge 단독 환경 등)
+        return
+
+    # 갱신 대상 path
+    paths = ["/", f"/novel/{novel_id}"]
+    tags = ["novels"]
+
+    try:
+        resp = req.post(
+            url,
+            json={"paths": paths, "tags": tags},
+            headers={
+                "Authorization": f"Bearer {token}",
+                "Content-Type": "application/json",
+            },
+            timeout=10,
+        )
+        if resp.ok:
+            log.info(f"  ✓ Vercel revalidate 성공: {paths}")
+        else:
+            log.warning(f"  ⚠ Vercel revalidate 실패: {resp.status_code} {resp.text[:200]}")
+    except Exception as e:
+        log.warning(f"  ⚠ Vercel revalidate 오류 (무시): {e}")
 
 
 def enrich_metadata_from_namu(novel_id: str, novel_title: str) -> dict:

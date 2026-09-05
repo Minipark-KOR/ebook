@@ -40,7 +40,7 @@ export async function POST(req: NextRequest) {
   }
   for (const t of tags) {
     try {
-      revalidateTag(t);
+      revalidateTag(t, "default");
     } catch {
       // ignore
     }

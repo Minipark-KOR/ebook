@@ -70,7 +70,6 @@ export default async function Home() {
                     }
                   >
                     {novel.status}
-                    {novel.status === "완결" && " (완)"}
                   </span>
                 )}
               </div>

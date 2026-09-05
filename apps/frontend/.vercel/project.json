@@ -1,0 +1,16 @@
+{
+  "projectId": "prj_AgCf0ZgzOUJ72pn0g9sJvq3lCm9v",
+  "orgId": "team_b1p31tRpp5RLMvUcDxitvoSp",
+  "projectName": "miniebook",
+  "settings": {
+    "createdAt": 1788342049299,
+    "framework": "nextjs",
+    "devCommand": null,
+    "installCommand": "npm install",
+    "buildCommand": "npm run build",
+    "outputDirectory": ".next",
+    "rootDirectory": "apps/frontend",
+    "directoryListing": false,
+    "nodeVersion": "24.x"
+  }
+}

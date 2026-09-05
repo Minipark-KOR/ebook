@@ -88,6 +88,32 @@ async function proxyToNeon(req: NextRequest, slug: string[]): Promise<NextRespon
       });
     }
 
+    // GET /api/novels/{id}/epub (EPUB 다운로드 - devforge 백엔드로 프록시)
+    if (req.method === "GET" && slug[0] === "novels" && slug.length === 3 && slug[2] === "epub") {
+      const novelId = decodeURIComponent(slug[1]);
+      const backendUrl = `${BACKEND}/api/novels/${encodeURIComponent(novelId)}/epub`;
+      const resp = await fetch(backendUrl, {
+        headers: {
+          "User-Agent": "Mozilla/5.0",
+        },
+      });
+      if (!resp.ok) {
+        return NextResponse.json(
+          { detail: `EPUB fetch failed: ${resp.status}` },
+          { status: resp.status }
+        );
+      }
+      const blob = await resp.arrayBuffer();
+      return new NextResponse(blob, {
+        status: 200,
+        headers: {
+          "Content-Type": "application/epub+zip",
+          "Content-Disposition": `attachment; filename*=UTF-8''${encodeURIComponent(novel.title)}.epub`,
+          "Content-Length": String(blob.byteLength),
+        },
+      });
+    }
+
     if (slug[0] === 'chapters' && slug.length === 2) {
       // GET /api/chapters/{wr_id}
       const wrId = parseInt(slug[1]);

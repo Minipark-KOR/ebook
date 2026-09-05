@@ -289,6 +289,16 @@ def save_chapter(wr_id: int, novel_title: str, body: str) -> bool:
 
     log.info(f"  저장 완료: {chapter_file} ({len(body)} chars)")
 
+    # Neon DB 동기화 (Vercel SSR용)
+    try:
+        import sys
+        sys.path.insert(0, '/opt/workspace/ebooklib/apps/backend')
+        from services.ebook_sync import sync_novel
+        if sync_novel(novel_id, novel_dir):
+            log.info(f"  ✓ Neon DB 동기화 완료")
+    except Exception as e:
+        log.warning(f"  ⚠ Neon 동기화 실패 (계속 진행): {e}")
+
     # Vercel 캐시 즉시 갱신 트리거
     _trigger_vercel_revalidate(novel_id, new_novel)
 

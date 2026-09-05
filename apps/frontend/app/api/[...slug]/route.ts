@@ -153,6 +153,16 @@ async function proxy(req: NextRequest, slug: string[]) {
     return proxyToNeon(req, slug);
   }
 
+  // /api/novels/{id}/chapters (회차 목록) - Neon 직접 조회
+  if (
+    req.method === 'GET' &&
+    slug[0] === 'novels' &&
+    slug.length === 3 &&
+    slug[2] === 'chapters'
+  ) {
+    return proxyNovelChapters(req, slug);
+  }
+
   // image-proxy는 별도 route.ts가 처리 (Node.js runtime)
   // 여기까지 도달하면 catch-all이 매칭된 것 → devforge로 프록시
 
@@ -215,6 +225,55 @@ export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 type Props = { params: Promise<{ slug: string[] }> };
+
+async function proxyNovelChapters(req: NextRequest, slug: string[]): Promise<NextResponse> {
+  if (!neonPool) {
+    return new NextResponse(
+      JSON.stringify({ detail: 'Neon not configured' }),
+      { status: 503, headers: { 'Content-Type': 'application/json' } }
+    );
+  }
+
+  try {
+    const novelId = decodeURIComponent(slug[1]);
+    const url = req.nextUrl.searchParams;
+    const page = parseInt(url.get("page") || "1");
+    const limit = Math.min(parseInt(url.get("limit") || "20"), 100);
+
+    // 전체 개수
+    const countRows = await neonQuery(
+      "SELECT COUNT(*) as total FROM ebook_chapters WHERE novel_id = $1",
+      [novelId]
+    );
+    const total = parseInt(countRows[0]?.total || 0);
+
+    // 페이지네이션
+    const offset = (page - 1) * limit;
+    const rows = await neonQuery(
+      `SELECT wr_id, chapter, title, content_length
+       FROM ebook_chapters
+       WHERE novel_id = $1
+       ORDER BY wr_id
+       LIMIT $2 OFFSET $3`,
+      [novelId, limit, offset]
+    );
+
+    return NextResponse.json(
+      {
+        data: rows.map((r: any) => ({
+          wr_id: Number(r.wr_id),
+          chapter: r.chapter,
+          title: r.title,
+          contentLength: r.content_length || 0,
+        })),
+        pagination: { page, limit, total },
+      },
+      { headers: { "Cache-Control": "public, s-maxage=60, stale-while-revalidate=300" } }
+    );
+  } catch (e) {
+    return NextResponse.json({ detail: String(e) }, { status: 500 });
+  }
+}
 
 async function proxyImageProxy(req: NextRequest): Promise<NextResponse> {
   const url = req.nextUrl.searchParams.get("url");

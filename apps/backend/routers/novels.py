@@ -5,13 +5,72 @@
 
 from urllib.parse import quote
 
-from fastapi import APIRouter, HTTPException
-from fastapi.responses import Response
+import requests
+from fastapi import APIRouter, HTTPException, Query
+from fastapi.responses import Response, StreamingResponse
 
 from services.data import get_novel_list, get_novel_detail
 from services.epub import build_epub, get_novel_title
 
 router = APIRouter()
+
+
+# image-proxy 라우트는 가장 먼저 (/{novel_id}보다 구체적이므로 먼저 매칭되어야 함)
+@router.get("/novels/image-proxy")
+async def image_proxy(url: str = Query(..., description="원본 이미지 URL")):
+    """외부 이미지 프록시 (Vercel 서버리스에서 외부 도메인 이미지 로드).
+
+    namu.wiki 등 외부 도메인 이미지를 자체 도메인으로 프록시하여
+    안정적인 이미지 제공. 캐시 헤더 포함.
+    """
+    # 화이트리스트 (보안: 임의 사이트 차단)
+    ALLOWED_DOMAINS = [
+        "i.namu.wiki",
+        "namu.wiki",
+    ]
+
+    # URL 검증
+    if not url.startswith(("http://", "https://")):
+        raise HTTPException(status_code=400, detail="Invalid URL")
+
+    from urllib.parse import urlparse
+    parsed = urlparse(url)
+    if parsed.netloc not in ALLOWED_DOMAINS:
+        raise HTTPException(
+            status_code=403,
+            detail=f"Domain not allowed: {parsed.netloc}",
+        )
+
+    # 이미지 fetch
+    try:
+        resp = requests.get(
+            url,
+            headers={
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
+                "Referer": "https://namu.wiki/",
+            },
+            timeout=15,
+            stream=True,
+        )
+        resp.raise_for_status()
+
+        content_type = resp.headers.get("content-type", "image/webp")
+
+        # 캐시 헤더 (1일)
+        headers = {
+            "Cache-Control": "public, max-age=86400, immutable",
+        }
+
+        return StreamingResponse(
+            resp.iter_content(chunk_size=8192),
+            media_type=content_type,
+            headers=headers,
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Image fetch failed: {type(e).__name__}",
+        )
 
 
 @router.get("/novels")

@@ -227,8 +227,6 @@ def save_chapter(wr_id: int, novel_title: str, body: str) -> bool:
     import json as _json
 
     # wr_id → 회차 번호 (대부분 21430 기준이지만 새 소설은 다름)
-    # 일단 wr_id를 그대로 사용, chapter는 회차 번호 추정
-    # (실제 chapter 추출은 content의 첫 줄 파싱으로 시도)
     chapter_num = None
     first_line = body.split('\n')[0] if body else ''
     import re
@@ -237,11 +235,9 @@ def save_chapter(wr_id: int, novel_title: str, body: str) -> bool:
         chapter_num = int(m.group(1))
 
     if chapter_num is None:
-        # 기본값: wr_id 그대로 사용 (다운로드 시 추측)
         chapter_num = wr_id
 
     # 소설 디렉토리 찾기/생성
-    # novel_title을 ID로 사용 (안전한 형태로)
     novel_id = novel_title.replace(' ', '_').replace('/', '_') if novel_title else f"novel_{wr_id}"
     novel_dir = Path('/opt/ai_data/flaresolverr/novels') / novel_id
     novel_dir.mkdir(parents=True, exist_ok=True)
@@ -271,13 +267,8 @@ def save_chapter(wr_id: int, novel_title: str, body: str) -> bool:
     # meta.json 생성/업데이트 (소설 첫 챕터인 경우)
     meta_file = novel_dir / 'meta.json'
     if not meta_file.exists():
-        meta = {
-            "id": novel_id,
-            "title": novel_title,
-            "author": "미상",
-            "totalChapters": 1,  # 추후 갱신
-            "coverUrl": None,
-        }
+        # 새 소설 - namu.wiki로 메타데이터 자동 보강
+        meta = enrich_metadata_from_namu(novel_id, novel_title)
         with open(meta_file, 'w', encoding='utf-8') as f:
             _json.dump(meta, f, ensure_ascii=False, indent=2)
     else:
@@ -296,6 +287,58 @@ def save_chapter(wr_id: int, novel_title: str, body: str) -> bool:
 
     log.info(f"  저장 완료: {chapter_file} ({len(body)} chars)")
     return True
+
+
+def enrich_metadata_from_namu(novel_id: str, novel_title: str) -> dict:
+    """namu.wiki에서 소설 메타데이터 가져와서 meta.json 생성.
+
+    Returns:
+        meta.json 내용 dict
+    """
+    import json as _json
+
+    # 기본 메타
+    meta = {
+        "id": novel_id,
+        "title": novel_title,
+        "author": "미상",
+        "totalChapters": 1,
+        "coverUrl": None,
+        "description": "",
+        "genre": [],
+        "status": "unknown",
+        "publisher": "북토끼",
+        "namuUrl": None,
+    }
+
+    # 표지 이미지 저장 경로
+    cover_path = Path('/opt/ai_data/flaresolverr/covers') / f"{novel_id}.webp"
+
+    # 첫 챕터 저장 시 namu.wiki 조회 (rate_limit 자동 적용)
+    try:
+        from services import metadata_namu
+        log.info(f"  namu.wiki 메타데이터 조회 시도: {novel_title}")
+        namu_meta = metadata_namu.get_metadata(novel_title, download_cover_to=cover_path)
+        if namu_meta:
+            if namu_meta.get('author'):
+                meta['author'] = namu_meta['author']
+            if namu_meta.get('cover_url'):
+                meta['coverUrl'] = namu_meta['cover_url']
+            if namu_meta.get('description'):
+                meta['description'] = namu_meta['description']
+            if namu_meta.get('genre'):
+                meta['genre'] = namu_meta['genre']
+            if namu_meta.get('status') and namu_meta['status'] != 'unknown':
+                meta['status'] = namu_meta['status']
+            if namu_meta.get('publisher'):
+                meta['publisher'] = namu_meta['publisher']
+            if namu_meta.get('url'):
+                meta['namuUrl'] = namu_meta['url']
+            log.info(f"  ✓ namu.wiki 메타데이터 적용: 작가={meta['author']}, 표지={meta['coverUrl']}")
+    except Exception as e:
+        log.warning(f"  namu.wiki 메타데이터 조회 실패 (기본값 사용): {e}")
+
+    return meta
 
 
 def process_queue() -> dict:

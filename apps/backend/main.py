@@ -9,6 +9,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 
 # 환경 변수 로드
 env_path = Path(__file__).parent / ".env"
@@ -35,6 +36,11 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# 정적 파일 - 표지 이미지
+COVERS_DIR = Path("/opt/ai_data/flaresolverr/covers")
+COVERS_DIR.mkdir(parents=True, exist_ok=True)
+app.mount("/api/covers", StaticFiles(directory=str(COVERS_DIR)), name="covers")
 
 # 라우터 등록
 app.include_router(novels.router, prefix="/api", tags=["novels"])

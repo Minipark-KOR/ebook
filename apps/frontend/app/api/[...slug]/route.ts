@@ -5,25 +5,42 @@ const BACKEND = process.env.NEXT_PUBLIC_API_URL || 'https://devforge.152-69-229-
 async function proxy(req: NextRequest, slug: string[]) {
   const path = slug.join('/');
   const url = `${process.env.NEXT_PUBLIC_API_URL || 'https://devforge.152-69-229-246.nip.io'}/api/${path}${new URL(req.url).search}`;
-  
+
   // Origin 헤더 전달 (백엔드 CORS 응답 위해 필수)
-  const headers: Record<string, string> = {
-    'Content-Type': 'application/json',
-  };
+  const headers: Record<string, string> = {};
   const origin = req.headers.get('origin');
   if (origin) headers['Origin'] = origin;
   const referer = req.headers.get('referer');
   if (referer) headers['Referer'] = referer;
-  
+
   const res = await fetch(url, {
     method: req.method,
     headers,
     body: ['GET', 'HEAD'].includes(req.method) ? undefined : await req.text(),
   });
-  
+
+  const contentType = res.headers.get('content-type') || '';
+
+  // JSON이 아닌 응답(이미지, EPUB 등 바이너리)은 그대로 스트리밍
+  if (!contentType.includes('application/json')) {
+    const blob = await res.blob();
+    const responseHeaders: Record<string, string> = {};
+    // Content-Type, Content-Disposition 등 핵심 헤더만 포워딩
+    for (const [k, v] of res.headers.entries()) {
+      // hop-by-hop 헤더 제외
+      if (['connection', 'keep-alive', 'transfer-encoding'].includes(k.toLowerCase())) continue;
+      responseHeaders[k] = v;
+    }
+    return new NextResponse(blob, {
+      status: res.status,
+      headers: responseHeaders,
+    });
+  }
+
+  // JSON 응답은 그대로 포워딩
   const data = await res.json();
   const response = NextResponse.json(data, { status: res.status });
-  
+
   // CORS 헤더 포워딩
   const corsHeaders = [
     'access-control-allow-origin',
@@ -36,7 +53,7 @@ async function proxy(req: NextRequest, slug: string[]) {
     const value = res.headers.get(header);
     if (value) response.headers.set(header, value);
   }
-  
+
   return response;
 }
 

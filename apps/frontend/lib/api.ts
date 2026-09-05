@@ -8,6 +8,11 @@ export interface Novel {
   author: string;
   totalChapters: number;
   coverUrl: string | null;
+  description?: string;
+  genre?: string[];
+  status?: string;
+  publisher?: string;
+  namuUrl?: string;
 }
 
 export interface Chapter {

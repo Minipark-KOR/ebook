@@ -4,20 +4,34 @@
 """EPUB 생성 서비스.
 
 DB에 저장된 챕터 JSON 파일들을 모아서 EPUB 파일을 생성한다.
-한글 텍스트라 UTF-8 인코딩 필수. GoNoto 폰트 임베드로 한글 깨짐 방지.
+한글 텍스트라 UTF-8 인코딩 필수. 4개 폰트 임베드 (한글 + 영문).
+
+폰트 시스템:
+- NotoSansKR: 한글 고딕 (제목, h1)
+- RIDIBatang: 한글 세리프 (본문)
+- MaruBuri: 한글 둥근고딕 (인용)
+- Literata: 영문 세리프 (fallback)
 """
 
 import io
 import json
 import re
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Dict
 
 from ebooklib import epub
 
 
 DATA_DIR = Path("/opt/ai_data/flaresolverr/novels")
-FONT_PATH = Path("/home/opc/.local/lib/python3.11/site-packages/static/fonts/GoNotoCurrent-Regular.ttf")
+FONTS_DIR = Path("/opt/workspace/ebooklib/scripts/fonts")
+
+# 4개 폰트 정의 (filename, font-family name, MIME type)
+FONTS = [
+    ("NotoSansKR-Regular.ttf", "NotoSansKR", "application/font-sfnt"),
+    ("RIDIBatang.otf", "RIDIBatang", "application/vnd.openxmlformats-officedocument.font"),
+    ("MaruBuri-Regular.ttf", "MaruBuri", "application/font-sfnt"),
+    ("Literata-Variable.ttf", "Literata", "application/font-sfnt"),
+]
 
 
 def _read_chapter(chapter_file: Path) -> Optional[dict]:
@@ -46,35 +60,14 @@ def _clean_content(content: str) -> str:
 
 
 def _build_chapter_html(title: str, content: str) -> bytes:
-    """EPUB 챕터 HTML 바이트 생성 (CSS로 한글 폰트 적용)."""
-    css = (
-        "@font-face {"
-        '  font-family: "GoNotoCurrent";'
-        '  src: url("../fonts/GoNotoCurrent-Regular.ttf") format("truetype");'
-        "}\n"
-        "body {"
-        '  font-family: "GoNotoCurrent", "Noto Sans", sans-serif;'
-        "  line-height: 1.7;"
-        "  margin: 1em;"
-        "}\n"
-        "h1 {"
-        "  font-size: 1.4em;"
-        "  margin-bottom: 1em;"
-        "  page-break-before: always;"
-        "}\n"
-        "p {"
-        "  margin: 0.5em 0;"
-        "  text-indent: 1em;"
-        "}"
-    )
-
+    """EPUB 챕터 HTML 바이트 생성."""
     body_parts = [
         '<?xml version="1.0" encoding="utf-8"?>',
         '<!DOCTYPE html>',
         '<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops">',
         "<head>",
         f"<title>{title}</title>",
-        f"<style>{css}</style>",
+        '<link rel="stylesheet" type="text/css" href="../styles/main.css" />',
         "</head>",
         "<body>",
         f"<h1>{title}</h1>",
@@ -84,6 +77,111 @@ def _build_chapter_html(title: str, content: str) -> bytes:
             body_parts.append(f"<p>{para.strip()}</p>")
     body_parts.extend(["</body>", "</html>"])
     return "\n".join(body_parts).encode("utf-8")
+
+
+def _build_main_css() -> bytes:
+    """다중 폰트 + 스타일 메인 CSS."""
+    font_face_rules = "\n".join([
+        f"""@font-face {{
+  font-family: "{family}";
+  font-weight: 400;
+  font-style: normal;
+  src: url("../fonts/{filename}") format("truetype");
+}}"""
+        for filename, family, _ in FONTS
+    ])
+
+    css = f"""
+{font_face_rules}
+
+body {{
+  font-family: "RIDIBatang", "NotoSansKR", "Literata", serif;
+  line-height: 1.8;
+  margin: 1.5em;
+  font-size: 1em;
+  color: #222;
+  background-color: #fefefe;
+}}
+
+h1 {{
+  font-family: "NotoSansKR", "Literata", sans-serif;
+  font-size: 1.6em;
+  font-weight: 700;
+  margin-top: 0;
+  margin-bottom: 1.5em;
+  padding-bottom: 0.5em;
+  border-bottom: 2px solid #444;
+  page-break-before: always;
+}}
+
+h2 {{
+  font-family: "NotoSansKR", sans-serif;
+  font-size: 1.3em;
+  font-weight: 600;
+  margin: 1em 0 0.6em;
+  color: #333;
+}}
+
+h3 {{
+  font-family: "NotoSansKR", sans-serif;
+  font-size: 1.1em;
+  font-weight: 600;
+  margin: 1em 0 0.5em;
+  color: #444;
+}}
+
+p {{
+  margin: 0.8em 0;
+  text-indent: 1em;
+  line-height: 1.8;
+  word-break: keep-all;
+}}
+
+blockquote {{
+  font-family: "MaruBuri", "NotoSansKR", sans-serif;
+  margin: 1em 2em;
+  padding: 0.5em 1em;
+  border-left: 3px solid #888;
+  color: #555;
+  background-color: #f8f8f8;
+}}
+
+em, i {{
+  font-style: italic;
+}}
+
+strong, b {{
+  font-weight: 700;
+}}
+"""
+    return css.encode("utf-8")
+
+
+def _add_fonts_and_css(book: "epub.EpubBook") -> None:
+    """EPUB에 4개 폰트 + 메인 CSS 임베드."""
+    # 메인 CSS
+    css_item = epub.EpubItem(
+        uid="main_styles",
+        file_name="styles/main.css",
+        media_type="text/css",
+        content=_build_main_css(),
+    )
+    book.add_item(css_item)
+
+    # 폰트들
+    for idx, (filename, family, mime_type) in enumerate(FONTS):
+        font_path = FONTS_DIR / filename
+        if not font_path.exists():
+            continue
+        with open(font_path, "rb") as f:
+            font_content = f.read()
+        font_item = epub.EpubItem(
+            uid=f"font_{idx}_{family.lower()}",
+            file_name=f"fonts/{filename}",
+            media_type=mime_type,
+            content=font_content,
+        )
+        book.add_item(font_item)
 
 
 def build_epub(novel_id: str) -> Optional[bytes]:
@@ -106,7 +204,8 @@ def build_epub(novel_id: str) -> Optional[bytes]:
     if not chapter_files:
         return None
 
-    meta = {}
+    # 메타데이터
+    meta: Dict = {}
     meta_file = novel_dir / "meta.json"
     if meta_file.exists():
         with open(meta_file, "r", encoding="utf-8") as f:
@@ -116,27 +215,23 @@ def build_epub(novel_id: str) -> Optional[bytes]:
     title = meta.get("title") or first_chapter.get("title", novel_id).split(" - ")[0]
     author = meta.get("author", "미상")
     description = meta.get("description", "")
+    publisher = meta.get("publisher", "북토끼")
+    language = meta.get("language", "ko")
 
     book = epub.EpubBook()
     book.set_identifier(f"ebooklib-{novel_id}")
     book.set_title(title)
-    book.set_language("ko")
+    book.set_language(language)
     book.add_author(author)
+    if publisher:
+        book.add_metadata("DC", "publisher", publisher)
     if description:
         book.add_metadata("DC", "description", description)
 
-    # 폰트 임베드 (한글 표시)
-    if FONT_PATH.exists():
-        with open(FONT_PATH, "rb") as f:
-            font_content = f.read()
-        font_item = epub.EpubItem(
-            uid="font_gonoto",
-            file_name="fonts/GoNotoCurrent-Regular.ttf",
-            media_type="application/font-sfnt",
-            content=font_content,
-        )
-        book.add_item(font_item)
+    # 4개 폰트 + CSS 임베드
+    _add_fonts_and_css(book)
 
+    # 챕터 변환
     chapter_items = []
     for idx, chap_file in enumerate(chapter_files, 1):
         ch = _read_chapter(chap_file)
@@ -149,7 +244,7 @@ def build_epub(novel_id: str) -> Optional[bytes]:
             uid=f"chap_{idx:04d}",
             title=ch_title,
             file_name=f"chap_{idx:04d}.xhtml",
-            lang="ko",
+            lang=language,
             content=_build_chapter_html(ch_title, ch_content),
         )
         book.add_item(chapter)
@@ -158,6 +253,7 @@ def build_epub(novel_id: str) -> Optional[bytes]:
     if not chapter_items:
         return None
 
+    # 목차 / 네비게이션
     book.toc = tuple(chapter_items)
     book.add_item(epub.EpubNcx())
     book.add_item(epub.EpubNav())

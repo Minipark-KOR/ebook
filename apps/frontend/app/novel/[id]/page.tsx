@@ -125,9 +125,52 @@ export default function NovelPage() {
 
         {/* Novel Header with Metadata */}
         <div className="mb-8">
-          <h1 className="text-3xl font-bold text-gray-900 dark:text-white mb-2">
-            {novel.title}
-          </h1>
+          <div className="flex flex-col md:flex-row gap-6">
+            {/* 표지 이미지 */}
+            {novel.coverUrl && (
+              <div className="flex-shrink-0">
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img
+                  src={novel.coverUrl}
+                  alt={novel.title}
+                  className="w-48 h-auto rounded-lg shadow-md object-cover"
+                />
+              </div>
+            )}
+            <div className="flex-1">
+              <h1 className="text-3xl font-bold text-gray-900 dark:text-white mb-2">
+                {novel.title}
+              </h1>
+              <p className="text-lg text-gray-700 dark:text-gray-300 mb-2">
+                {novel.author}
+              </p>
+              <div className="flex flex-wrap gap-2 mb-4">
+                {novel.genre?.map((g, i) => (
+                  <span
+                    key={i}
+                    className="px-2 py-1 bg-blue-100 dark:bg-blue-900 text-blue-800 dark:text-blue-200 text-xs rounded"
+                  >
+                    {g}
+                  </span>
+                ))}
+                {novel.status && novel.status !== "unknown" && (
+                  <span className="px-2 py-1 bg-green-100 dark:bg-green-900 text-green-800 dark:text-green-200 text-xs rounded">
+                    {novel.status}
+                  </span>
+                )}
+              </div>
+              {/* 표지 아래로 EPUB 다운로드 버튼 - 우측 정렬 */}
+              <div className="flex justify-end">
+                <a
+                  href={`/api/novels/${encodeURIComponent(novelId)}/epub`}
+                  download
+                  className="px-4 py-2 bg-green-600 text-white rounded hover:bg-green-700"
+                >
+                  EPUB 다운로드
+                </a>
+              </div>
+            </div>
+          </div>
           
           {/* Metadata Info Cards */}
           {metadata && (
@@ -172,11 +215,23 @@ export default function NovelPage() {
           )}
 
           {/* Description */}
-          {metadata?.description && (
+          {(metadata?.description || novel.description) && (
             <div className="bg-white dark:bg-gray-800 p-4 rounded-lg shadow mb-6">
-              <p className="text-sm text-gray-500 dark:text-gray-400 mb-2">줄거리</p>
-              <p className="text-gray-700 dark:text-gray-300 whitespace-pre-wrap line-clamp-5">
-                {metadata.description}
+              <p className="text-sm text-gray-500 dark:text-gray-400 mb-2">
+                줄거리
+                {novel.namuUrl && (
+                  <a
+                    href={novel.namuUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="ml-2 text-xs text-blue-600 dark:text-blue-400 hover:underline"
+                  >
+                    (출처: namu.wiki ↗)
+                  </a>
+                )}
+              </p>
+              <p className="text-gray-700 dark:text-gray-300 whitespace-pre-wrap">
+                {novel.description || metadata?.description}
               </p>
             </div>
           )}
@@ -184,14 +239,7 @@ export default function NovelPage() {
           {/* Local Info */}
           <div className="flex flex-wrap gap-4 text-sm text-gray-600 dark:text-gray-400 mb-6">
             <span>총 {novel.totalChapters}화</span>
-            {metadata && <span>데이터 소스: {metadata.source}</span>}
-            <a
-              href={`/api/novels/${encodeURIComponent(novelId)}/epub`}
-              download
-              className="px-3 py-1 bg-green-600 text-white rounded hover:bg-green-700 text-sm"
-            >
-              EPUB 다운로드
-            </a>
+            {novel.publisher && <span>출판사: {novel.publisher}</span>}
           </div>
         </div>
 

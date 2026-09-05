@@ -19,7 +19,14 @@ import re
 from pathlib import Path
 from typing import Optional, Dict
 
-from ebooklib.epub import epub
+from ebooklib.epub import (
+    EpubBook,
+    EpubHtml,
+    EpubNcx,
+    EpubNav,
+    EpubItem,
+    write_epub,
+)
 
 
 DATA_DIR = Path("/opt/ai_data/flaresolverr/novels")
@@ -157,10 +164,10 @@ strong, b {{
     return css.encode("utf-8")
 
 
-def _add_fonts_and_css(book: "epub.EpubBook") -> None:
+def _add_fonts_and_css(book: "EpubBook") -> None:
     """EPUB에 4개 폰트 + 메인 CSS 임베드."""
     # 메인 CSS
-    css_item = epub.EpubItem(
+    css_item = EpubItem(
         uid="main_styles",
         file_name="styles/main.css",
         media_type="text/css",
@@ -175,7 +182,7 @@ def _add_fonts_and_css(book: "epub.EpubBook") -> None:
             continue
         with open(font_path, "rb") as f:
             font_content = f.read()
-        font_item = epub.EpubItem(
+        font_item = EpubItem(
             uid=f"font_{idx}_{family.lower()}",
             file_name=f"fonts/{filename}",
             media_type=mime_type,
@@ -218,7 +225,7 @@ def build_epub(novel_id: str) -> Optional[bytes]:
     publisher = meta.get("publisher", "북토끼")
     language = meta.get("language", "ko")
 
-    book = epub.EpubBook()
+    book = EpubBook()
     book.set_identifier(f"ebooklib-{novel_id}")
     book.set_title(title)
     book.set_language(language)
@@ -240,7 +247,7 @@ def build_epub(novel_id: str) -> Optional[bytes]:
         ch_title = ch.get("title") or f"챕터 {idx}"
         ch_content = _clean_content(ch.get("content", ""))
 
-        chapter = epub.EpubHtml(
+        chapter = EpubHtml(
             uid=f"chap_{idx:04d}",
             title=ch_title,
             file_name=f"chap_{idx:04d}.xhtml",
@@ -255,12 +262,12 @@ def build_epub(novel_id: str) -> Optional[bytes]:
 
     # 목차 / 네비게이션
     book.toc = tuple(chapter_items)
-    book.add_item(epub.EpubNcx())
-    book.add_item(epub.EpubNav())
+    book.add_item(EpubNcx())
+    book.add_item(EpubNav())
     book.spine = ["nav", *chapter_items]
 
     buf = io.BytesIO()
-    epub.write_epub(buf, book)
+    write_epub(buf, book)
     return buf.getvalue()
 
 

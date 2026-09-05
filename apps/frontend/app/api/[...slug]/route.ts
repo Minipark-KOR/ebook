@@ -153,6 +153,11 @@ async function proxy(req: NextRequest, slug: string[]) {
     return proxyToNeon(req, slug);
   }
 
+  // image-proxy는 Edge runtime에서 외부 fetch로 직접 처리
+  if (slug[0] === 'novels' && slug[1] === 'image-proxy' && slug.length === 2) {
+    return proxyImageProxy(req);
+  }
+
   const path = slug.join('/');
   const url = `${process.env.NEXT_PUBLIC_API_URL || 'https://devforge.152-69-229-246.nip.io'}/api/${path}${new URL(req.url).search}`;
 
@@ -212,6 +217,49 @@ export const runtime = 'edge';
 export const dynamic = 'force-dynamic';
 
 type Props = { params: Promise<{ slug: string[] }> };
+
+async function proxyImageProxy(req: NextRequest): Promise<NextResponse> {
+  const url = req.nextUrl.searchParams.get("url");
+  if (!url) {
+    return new NextResponse("Missing url parameter", { status: 400 });
+  }
+
+  // 화이트리스트
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return new NextResponse("Invalid url", { status: 400 });
+  }
+
+  const ALLOWED = ["i.namu.wiki", "namu.wiki"];
+  if (!ALLOWED.includes(parsed.hostname)) {
+    return new NextResponse(`Domain not allowed: ${parsed.hostname}`, { status: 403 });
+  }
+
+  // Edge runtime: native fetch 사용
+  const resp = await fetch(url, {
+    headers: {
+      "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
+      "Referer": "https://namu.wiki/",
+    },
+  });
+
+  if (!resp.ok) {
+    return new NextResponse(`Upstream error: ${resp.status}`, { status: 502 });
+  }
+
+  const contentType = resp.headers.get("content-type") || "image/webp";
+  const body = await resp.arrayBuffer();
+
+  return new NextResponse(body, {
+    status: 200,
+    headers: {
+      "Content-Type": contentType,
+      "Cache-Control": "public, max-age=86400, immutable",
+    },
+  });
+}
 
 export async function GET(req: NextRequest, { params }: Props) {
   const slug = (await params).slug;

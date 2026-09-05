@@ -82,6 +82,64 @@ def _guess_novel_main_wr_id(novel_id: str, meta: dict) -> Optional[int]:
     return None
 
 
+def _infer_status_from_db(novel_dir: Path, meta: dict) -> str:
+    """DB의 마지막 챕터 수집일 + 챕터 수로 연재 상태 추정.
+
+    - namu.wiki 데이터 의존 안 함
+    - 마지막 챕터가 2주(14일) 이상 오래 = 완결 후보
+    - 그 외 = 연재중
+    - 챕터 1개 = 단편 or 신규
+    """
+    from datetime import datetime, timezone, timedelta
+
+    # meta.json에 명시적 status가 있으면 우선 사용 (단, "unknown"이 아닐 때)
+    explicit = meta.get("status", "")
+    if explicit and explicit != "unknown":
+        return explicit
+
+    # 마지막 챕터의 collected_at 확인
+    chapter_files = sorted(
+        novel_dir.glob("*.json"),
+        key=lambda f: int(f.stem) if f.stem.isdigit() else 0,
+    )
+    last_collected = None
+    for ch_file in reversed(chapter_files):
+        if not ch_file.stem.isdigit():
+            continue
+        try:
+            with open(ch_file, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            collected_at = data.get("collected_at")
+            if collected_at:
+                # ISO 8601 파싱
+                if collected_at.endswith("Z"):
+                    collected_at = collected_at[:-1] + "+00:00"
+                last_collected = datetime.fromisoformat(collected_at)
+                break
+        except Exception:
+            continue
+
+    if last_collected is None:
+        return "unknown"
+
+    # 마지막 수집일로부터 경과일
+    now = datetime.now(timezone.utc)
+    if last_collected.tzinfo is None:
+        last_collected = last_collected.replace(tzinfo=timezone.utc)
+    days_since = (now - last_collected).total_seconds() / 86400
+
+    # 챕터가 1개면 단편 or 신규
+    chapter_count = sum(1 for f in chapter_files if f.stem.isdigit())
+    if chapter_count <= 1:
+        return "단편" if days_since > 14 else "신규"
+
+    # 2주 이상 갱신 없으면 완결
+    if days_since >= 14:
+        return "완결"
+    else:
+        return "연재중"
+
+
 def sync_novel(novel_id: str, novel_dir: Path) -> bool:
     """단일 소설 메타데이터 + 모든 챕터를 Neon DB에 UPSERT.
 
@@ -120,35 +178,37 @@ def sync_novel(novel_id: str, novel_dir: Path) -> bool:
         conn.autocommit = False
         cur = conn.cursor()
 
-        # 1) 소설 메타 UPSERT
-        cur.execute("""
-            INSERT INTO ebook_novels
-                (id, title, author, total_chapters, cover_url, description,
-                 genre, status, publisher, namu_url, updated_at)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())
-            ON CONFLICT (id) DO UPDATE SET
-                title = EXCLUDED.title,
-                author = EXCLUDED.author,
-                total_chapters = EXCLUDED.total_chapters,
-                cover_url = EXCLUDED.cover_url,
-                description = EXCLUDED.description,
-                genre = EXCLUDED.genre,
-                status = EXCLUDED.status,
-                publisher = EXCLUDED.publisher,
-                namu_url = EXCLUDED.namu_url,
-                updated_at = NOW()
-        """, (
-            meta.get("id", novel_id),
-            meta.get("title", novel_id),
-            meta.get("author", "미상"),
-            chapter_count,
-            meta.get("coverUrl"),
-            meta.get("description", ""),
-            _to_pg_array(meta.get("genre", [])),
-            meta.get("status", "unknown"),
-            meta.get("publisher", "북토끼"),
-            meta.get("namuUrl"),
-        ))
+    # 1) 소설 메타 UPSERT (연재 상태는 DB의 마지막 챕터 수집일로 추정)
+    inferred_status = _infer_status_from_db(novel_dir, meta)
+
+    cur.execute("""
+        INSERT INTO ebook_novels
+            (id, title, author, total_chapters, cover_url, description,
+             genre, status, publisher, namu_url, updated_at)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())
+        ON CONFLICT (id) DO UPDATE SET
+            title = EXCLUDED.title,
+            author = EXCLUDED.author,
+            total_chapters = EXCLUDED.total_chapters,
+            cover_url = EXCLUDED.cover_url,
+            description = EXCLUDED.description,
+            genre = EXCLUDED.genre,
+            status = EXCLUDED.status,
+            publisher = EXCLUDED.publisher,
+            namu_url = EXCLUDED.namu_url,
+            updated_at = NOW()
+    """, (
+        meta.get("id", novel_id),
+        meta.get("title", novel_id),
+        meta.get("author", "미상"),
+        chapter_count,
+        meta.get("coverUrl"),
+        meta.get("description", ""),
+        _to_pg_array(meta.get("genre", [])),
+        inferred_status,
+        meta.get("publisher", "북토끼"),
+        meta.get("namuUrl"),
+    ))
 
         # 2) 모든 챕터 UPSERT (batch)
         # 작품별 기본 wr_id offset (하남자의 탑은 21430 = 작품 메인, 21431 = 1화)

@@ -185,6 +185,13 @@ export default function NovelPage() {
           <div className="flex flex-wrap gap-4 text-sm text-gray-600 dark:text-gray-400 mb-6">
             <span>총 {novel.totalChapters}화</span>
             {metadata && <span>데이터 소스: {metadata.source}</span>}
+            <a
+              href={`/api/novels/${encodeURIComponent(novelId)}/epub`}
+              download
+              className="px-3 py-1 bg-green-600 text-white rounded hover:bg-green-700 text-sm"
+            >
+              EPUB 다운로드
+            </a>
           </div>
         </div>
 

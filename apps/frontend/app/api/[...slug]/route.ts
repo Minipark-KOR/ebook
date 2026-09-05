@@ -2,7 +2,18 @@ import { NextRequest, NextResponse } from 'next/server';
 
 const BACKEND = process.env.NEXT_PUBLIC_API_URL || 'https://devforge.152-69-229-246.nip.io';
 
+// 자체 라우트가 있는 경로는 프록시하지 않음
+const SELF_ROUTES = new Set(['revalidate']);
+
 async function proxy(req: NextRequest, slug: string[]) {
+  // 자체 라우트면 프록시 안 함
+  if (slug.length === 1 && SELF_ROUTES.has(slug[0])) {
+    return new NextResponse(
+      JSON.stringify({ detail: 'Handled by internal route' }),
+      { status: 404, headers: { 'Content-Type': 'application/json' } }
+    );
+  }
+
   const path = slug.join('/');
   const url = `${process.env.NEXT_PUBLIC_API_URL || 'https://devforge.152-69-229-246.nip.io'}/api/${path}${new URL(req.url).search}`;
 

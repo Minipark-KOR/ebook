@@ -14,6 +14,7 @@ from pathlib import Path
 
 from ebooklib import epub
 
+SCRIPT_DIR = Path(__file__).parent
 NOVEL_DIR = Path("/opt/ai_data/flaresolverr/novels/하남자의_탑_공략법")
 COVER_IMAGE = Path("/tmp/cover.jpg")
 OUTPUT_DIR = Path("/opt/workspace/ebooklib/output")
@@ -22,10 +23,10 @@ TITLE = "하남자의 탑 공략법"
 AUTHOR = "미상"
 
 FONTS = {
-    "NotoSansKR": Path("/tmp/fonts/NotoSansKR-Regular.ttf"),
-    "RIDIBatang": Path("/tmp/fonts/RIDIBatang.otf"),
-    "MaruBuri": Path("/tmp/fonts/TTF/MaruBuri-Regular.ttf"),
-    "Literata": Path("/tmp/fonts/Literata-Variable.ttf"),
+    "NotoSansKR": SCRIPT_DIR / "fonts" / "NotoSansKR-Regular.ttf",
+    "RIDIBatang": SCRIPT_DIR / "fonts" / "RIDIBatang.otf",
+    "MaruBuri": SCRIPT_DIR / "fonts" / "MaruBuri-Regular.ttf",
+    "Literata": SCRIPT_DIR / "fonts" / "Literata-Variable.ttf",
 }
 
 

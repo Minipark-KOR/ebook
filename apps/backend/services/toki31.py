@@ -1,18 +1,45 @@
 #!/usr/bin/env python3
 # Status: experimental
 # Path: ebooklib/apps/backend/services/toki31.py
-"""toki31.com 크롤러 - 일반 PC 브라우저 헤더 적용"""
+"""toki31.com 크롤러 - 일반 PC 헤더 + 무료 KR 프록시 자동 failover
 
-import re
-import requests
+배경:
+- toki31은 CloudFront에서 ASN 차단(Oracle 등 datacenter) + KR_ONLY 국가 검증을 한다.
+- 헤더 위장만으로는 우회 불가. residential IP(KR)가 필요하다.
+- 무료 KR proxy 리스트(proxyscrape.com)를 주기적으로 가져와 동작하는 proxy만
+  캐시한 뒤 자동 failover한다.
+"""
+
+import threading
+import time
 from typing import Optional
+
+import requests
 
 
 BASE_URL = "https://toki31.com"
 
+PROXY_SOURCES = [
+    (
+        "https://api.proxyscrape.com/v4/free-proxy-list/get"
+        "?request=display_proxies&proxy_format=protocolipport"
+        "&format=text&country=kr"
+    ),
+]
+
+VERIFY_URL = "https://toki31.com/"
+REFRESH_INTERVAL = 300  # 5분마다 proxy 풀 새로고침
+PROXY_TIMEOUT = 10
+VERIFY_TIMEOUT = 12
+
+
+_proxy_lock = threading.Lock()
+_proxies: list[dict] = []  # [{"scheme": "socks5", "url": "1.2.3.4:1080"}, ...]
+_proxies_loaded_at: float = 0.0
+
 
 def _build_headers() -> dict:
-    """일반 Windows Chrome 브라우저처럼 보이게 만드는 헤더"""
+    """일반 Windows Chrome처럼 보이게 하는 헤더."""
     return {
         "User-Agent": (
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -40,41 +67,140 @@ def _build_headers() -> dict:
     }
 
 
-def _create_session() -> requests.Session:
-    """재사용 가능한 Session 객체 생성 (쿠키/연결 유지)"""
+def _parse_proxy_line(line: str) -> Optional[dict]:
+    line = line.strip()
+    if not line:
+        return None
+    if "://" in line:
+        scheme, rest = line.split("://", 1)
+    else:
+        scheme, rest = "http", line
+    return {"scheme": scheme, "url": rest}
+
+
+def _fetch_proxy_candidates() -> list[dict]:
+    """공개 소스에서 KR proxy 후보 수집."""
+    candidates: list[dict] = []
+    for src in PROXY_SOURCES:
+        try:
+            r = requests.get(src, timeout=15)
+            if r.status_code != 200:
+                continue
+            for line in r.text.splitlines():
+                p = _parse_proxy_line(line)
+                if p:
+                    candidates.append(p)
+        except Exception:
+            continue
+    return candidates
+
+
+def _verify_proxy(proxy: dict) -> bool:
+    """후보 proxy가 toki31에 200으로 도달하는지 검증."""
+    proxies = {proxy["scheme"]: f"{proxy['scheme']}://{proxy['url']}"}
+    try:
+        resp = requests.get(
+            VERIFY_URL,
+            proxies=proxies,
+            timeout=VERIFY_TIMEOUT,
+            allow_redirects=False,
+            headers=_build_headers(),
+        )
+        return resp.status_code == 200
+    except Exception:
+        return False
+
+
+def _refresh_proxies(force: bool = False) -> None:
+    """proxy 풀 검증 후 캐시 갱신."""
+    global _proxies, _proxies_loaded_at
+    with _proxy_lock:
+        now = time.time()
+        if not force and (now - _proxies_loaded_at) < REFRESH_INTERVAL and _proxies:
+            return
+
+        candidates = _fetch_proxy_candidates()
+        # 중복 제거
+        seen: set[str] = set()
+        unique: list[dict] = []
+        for c in candidates:
+            key = f"{c['scheme']}://{c['url']}"
+            if key not in seen:
+                seen.add(key)
+                unique.append(c)
+
+        verified: list[dict] = []
+        for c in unique:
+            if _verify_proxy(c):
+                verified.append(c)
+            if len(verified) >= 10:
+                break
+
+        if verified:
+            _proxies = verified
+            _proxies_loaded_at = now
+
+
+def _create_session_with_proxy() -> Optional[requests.Session]:
+    """동작하는 proxy로 세션 생성. 풀 비면 새로 검증."""
+    _refresh_proxies()
+    with _proxy_lock:
+        if not _proxies:
+            return None
+        proxy = _proxies[0]
     session = requests.Session()
     session.headers.update(_build_headers())
+    session.proxies = {
+        proxy["scheme"]: f"{proxy['scheme']}://{proxy['url']}",
+    }
     return session
 
 
-def fetch_novel_list(page: int = 1) -> Optional[str]:
-    """toki31 소설 목록 페이지 HTML을 가져온다.
+def _fetch_with_failover(url: str, max_attempts: int = 5) -> Optional[str]:
+    """proxy 자동 failover하면서 url 요청. 모든 proxy 실패 시 None."""
+    last_err: Optional[Exception] = None
+    for attempt in range(max_attempts):
+        session = _create_session_with_proxy()
+        if session is None:
+            time.sleep(2)
+            _refresh_proxies(force=True)
+            continue
+        try:
+            resp = session.get(url, timeout=15)
+            if resp.status_code == 200:
+                return resp.text
+            if resp.status_code in (403, 429):
+                # 차단 감지 - 현재 proxy 제거
+                with _proxy_lock:
+                    if _proxies:
+                        _proxies.pop(0)
+                continue
+            resp.raise_for_status()
+            return resp.text
+        except Exception as e:
+            last_err = e
+            with _proxy_lock:
+                if _proxies:
+                    _proxies.pop(0)
+            continue
+    if last_err:
+        raise last_err
+    return None
 
-    Note:
-        toki31은 ASN 단위(Oracle Cloud 등)로 IP 차단을 적용할 수 있어
-        헤더만으로는 우회가 안 될 수 있다. 차단을 피하려면
-        일반 residential 네트워크를 통해 요청해야 한다.
-    """
-    session = _create_session()
+
+def fetch_novel_list(page: int = 1) -> Optional[str]:
+    """toki31 소설 목록 페이지 HTML을 가져온다."""
     url = f"{BASE_URL}/novel/list?page={page}"
-    resp = session.get(url, timeout=15)
-    resp.raise_for_status()
-    return resp.text
+    return _fetch_with_failover(url)
 
 
 def fetch_novel_detail(novel_id: int) -> Optional[str]:
     """개별 소설 상세 페이지 HTML을 가져온다."""
-    session = _create_session()
     url = f"{BASE_URL}/novel/{novel_id}"
-    resp = session.get(url, timeout=15)
-    resp.raise_for_status()
-    return resp.text
+    return _fetch_with_failover(url)
 
 
 def fetch_chapter(novel_id: int, chapter_id: int) -> Optional[str]:
     """소설 본문(회차) HTML을 가져온다."""
-    session = _create_session()
     url = f"{BASE_URL}/novel/{novel_id}/{chapter_id}"
-    resp = session.get(url, timeout=15)
-    resp.raise_for_status()
-    return resp.text
+    return _fetch_with_failover(url)

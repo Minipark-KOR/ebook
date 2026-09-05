@@ -246,7 +246,7 @@ NEXT_PUBLIC_API_URL=http://localhost:8000
 ### 헬스체크
 ```bash
 # API 서버
-curl https://miniebook.vercel.app/api/health
+curl https://miniebook.vercel.app/health
 
 # FlareSolverr
 curl http://127.0.0.1:8191/health
@@ -268,18 +268,16 @@ curl https://miniebook.vercel.app/api/chapters/21431 | head -c 200
 **ebook-watcher.service** (`~/.config/systemd/user/`):
 ```ini
 [Unit]
-Description=Ebook Watcher — ebook_worker 트리거 (1분마다)
+Description=Ebook Watcher — ebook_worker 트리거 (15분마다)
 After=network-online.target svc-pod.service container-flaresolverr.service
 Wants=network-online.target
 
 [Service]
-Type=simple
+Type=oneshot
 Environment=PYTHONPATH=/opt/workspace/ebooklib/scripts/ebook_watcher
 WorkingDirectory=/opt/workspace/ebooklib/scripts/ebook_watcher
 ExecStart=/opt/workspace/ebooklib/apps/backend/venv/bin/python3 /opt/workspace/ebooklib/scripts/ebook_watcher/watchdog.py
-Restart=always
-RestartSec=30
-TimeoutStopSec=60
+Restart=no
 StandardOutput=journal
 StandardError=journal
 

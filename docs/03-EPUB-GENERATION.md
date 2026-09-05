@@ -22,7 +22,7 @@ ebooklib의 EPUB 생성은 **로컬 DB의 챕터 JSON 파일들을 모아서** �
    └─ build_epub(novel_id)  ← services/epub.py
         ├─ DATA_DIR/{소설ID}/*.json glob
         ├─ 각 JSON 파싱 → EpubHtml 변환
-        ├─ GoNotoCurrent-Regular.ttf 임베드
+        ├─ 4개 한글 폰트 임베드 (NotoSansKR/RIDIBatang/MaruBuri/Literata)
         └─ EPUB 바이트 반환
    ↓
 [응답] Content-Type: application/epub+zip
@@ -307,8 +307,11 @@ unzip -p test.epub EPUB/chap_0001.xhtml | head -50
 - 더 큰 소설 (1000챕터+): 15MB+ EPUB
 
 ### 폰트 라이선스
-- GoNotoCurrent: SIL Open Font License (OFL) - 자유 재배포 가능
-- EPUB 내 임베드는 OFL 허용 범위 내
+- NotoSansKR: SIL Open Font License (OFL) - 자유 재배포 가능
+- RIDIBatang: RIDI 배포용 라이선스 - EPUB 내 임베드 허용
+- MaruBuri: SIL Open Font License (OFL)
+- Literata: SIL Open Font License (OFL)
+- EPUB 내 임베드는 모두 OFL/허용 범위 내
 
 ### 호환성
 - Apple Books: ✅

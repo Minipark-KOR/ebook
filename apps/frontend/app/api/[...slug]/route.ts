@@ -144,11 +144,13 @@ async function proxy(req: NextRequest, slug: string[]) {
   }
 
   // novels 관련 GET은 Neon DB 직접 조회 (self-hosted)
+  // 단, image-proxy, epub 등은 Neon이 아닌 devforge로 프록시
   if (
     req.method === 'GET' &&
-    (slug[0] === 'novels' ||
-      (slug[0] === 'chapters' && slug.length === 1) ||
-      (slug[0] === 'novels' && slug.length === 2 && /^\d+$/.test(slug[1])))
+    slug[0] === 'novels' &&
+    slug.length <= 2 &&
+    slug[1] !== 'image-proxy' &&
+    slug[1] !== 'epub'
   ) {
     return proxyToNeon(req, slug);
   }

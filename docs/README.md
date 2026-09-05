@@ -24,7 +24,7 @@ ebooklib = 한국 웹소설 크롤러 (북토끼/FlareSolverr 우회) → 로컬
 ```
 
 ### 핵심 파일
-- `apps/backend/services/epub.py` - EPUB 생성 (GoNoto 폰트 임베드)
+- `apps/backend/services/epub.py` - EPUB 생성 (4개 한글 폰트 임베드)
 - `apps/backend/services/bookto31.py` - 북토끼 크롤러 (rate_limit 내장)
 - `apps/backend/lib/rate_limiter.py` - 8분 + ±2분 jitter
 - `apps/frontend/app/novel/[id]/page.tsx` - 소설 상세 + 회차 목록 + EPUB 다운로드

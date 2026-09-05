@@ -28,7 +28,7 @@ ebooklib 시스템은 **3중 보호 계층**으로 자동 운영됩니다:
 - `ebook_queue.py` - CLI 큐 관리 도구
 
 **systemd 서비스**:
-- `ebook-watcher.service` - 워커 프로세스 (Restart=always)
+- `ebook-watcher.service` - 워커 프로세스 (Type=oneshot, Restart=no, timer 트리거 전용)
 - `ebook-watcher.timer` - `OnCalendar=*:0/15` 패턴, 15분마다 트리거
 
 **큐 디렉토리**: `/opt/ai_data/flaresolverr/ebook_watcher/`
@@ -90,11 +90,11 @@ SERVICE_TARGETS = [
 ### ebook-watcher 죽었을 때 (Layer 1 작동)
 
 ```
-1. ebook-watcher.service가 어떤 이유로 죽음 (예: 메모리 부족)
+1. ebook-watcher.service가 실행 중 죽음 (예: 메모리 부족)
+2. ebook-watcher.service는 Type=oneshot이므로 systemd가 재시작하지 않음
 3. ebook-watcher.timer @ 다음 15분마다 트리거
-   → systemd가 ebook-watcher.service 시작 시도
-   → systemd Restart=always 정책으로 자동 재시작
-4. 그래도 60초 안에 살아나지 않으면
+   → systemd가 ebook-watcher.service 다시 시작
+4. 그래도 15분 내에 복구되지 않으면
    devforge-watchdog이 60초 체크 후 detect
    → recover_service() 호출
    → systemctl --user restart ebook-watcher
@@ -127,7 +127,7 @@ SERVICE_TARGETS = [
 
 | 장치 | 작동 |
 |---|---|
-| **systemd Restart=always** | ebook-watcher 서비스 죽으면 systemd가 자동 재시작 |
+| **systemd timer (15분)** | ebook-watcher.service는 Type=oneshot, timer가 15분마다 트리거 |
 | **devforge-watchdog 60초 체크** | 서비스 죽으면 강제 재시작 |
 | **Backoff schedule (CrashLoopBackOff)** | 반복 실패 시 0→10→20→40→80→120→300초 대기 |
 | **Circuit breaker** | 120초 후 HALF_OPEN 시도 |

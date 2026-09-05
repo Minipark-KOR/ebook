@@ -1,12 +1,14 @@
-// 표지 이미지 프록시 (Node.js runtime - 외부 fetch 지원)
-// Vercel Edge runtime은 외부 도메인 fetch 차단되므로 Node.js 사용.
+// 표지 이미지 프록시 - devforge 백엔드 경유 (Vercel → namu.wiki 직접 fetch 실패)
+// Vercel IP는 namu.wiki CDN에서 403 차단하므로 devforge를 통해 우회
 
 import { NextRequest, NextResponse } from "next/server";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-const ALLOWED_DOMAINS = ["i.namu.wiki", "namu.wiki"];
+const BACKEND = process.env.NEXT_PUBLIC_API_URL
+  ? `${process.env.NEXT_PUBLIC_API_URL}/api`
+  : "https://devforge.152-69-229-246.nip.io/api";
 
 export async function GET(req: NextRequest) {
   const url = req.nextUrl.searchParams.get("url");
@@ -21,17 +23,16 @@ export async function GET(req: NextRequest) {
     return new NextResponse("Invalid url", { status: 400 });
   }
 
+  const ALLOWED_DOMAINS = ["i.namu.wiki", "namu.wiki"];
   if (!ALLOWED_DOMAINS.includes(parsed.hostname)) {
     return new NextResponse(`Domain not allowed: ${parsed.hostname}`, { status: 403 });
   }
 
+  // devforge 백엔드로 프록시 (Vercel → namu.wiki 직접 fetch는 403)
   try {
-    const resp = await fetch(url, {
-      headers: {
-        "User-Agent":
-          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
-        Referer: "https://namu.wiki/",
-      },
+    const backendUrl = `${BACKEND}/novels/image-proxy?url=${encodeURIComponent(url)}`;
+    const resp = await fetch(backendUrl, {
+      headers: { "User-Agent": "Mozilla/5.0" },
     });
 
     if (!resp.ok) {

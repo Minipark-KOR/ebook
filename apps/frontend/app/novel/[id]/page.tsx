@@ -1,10 +1,9 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import Image from "next/image";
 import Link from "next/link";
 import { useParams, useSearchParams, useRouter } from "next/navigation";
-import { fetchNovel, fetchChapters, fetchMetadata, Novel, Chapter, NovelMetadata } from "@/lib/api";
+import { fetchNovel, fetchChapters, Novel, Chapter } from "@/lib/api";
 
 const PAGE_SIZE = 100;
 
@@ -18,11 +17,9 @@ export default function NovelPage() {
 
   const [novel, setNovel] = useState<Novel | null>(null);
   const [chapters, setChapters] = useState<Chapter[]>([]);
-  const [metadata, setMetadata] = useState<NovelMetadata | null>(null);
   const [page, setPage] = useState(initialPage);
   const [totalPages, setTotalPages] = useState(1);
   const [loading, setLoading] = useState(true);
-  const [metadataLoading, setMetadataLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   const [jumpInput, setJumpInput] = useState("");
@@ -42,15 +39,6 @@ export default function NovelPage() {
       .catch((err) => setError(err.message))
       .finally(() => setLoading(false));
   }, [novelId, page]);
-
-  // Fetch metadata separately (using Brave for Korean web novels)
-  useEffect(() => {
-    if (!novel) return;
-    setMetadataLoading(true);
-    fetchMetadata(novel.title, "brave")
-      .then(setMetadata)
-      .finally(() => setMetadataLoading(false));
-  }, [novel]);
 
   // After a pending jump resolves to a chapter rendered in the current page,
   // scroll it into view and clear the pending marker.
@@ -124,7 +112,7 @@ export default function NovelPage() {
           ← 라이브러리로 돌아가기
         </Link>
 
-        {/* Novel Header with Metadata */}
+        {/* Novel Header with DB Metadata */}
         <div className="mb-8">
           <h1 className="text-3xl font-bold text-gray-900 dark:text-white mb-2">
             {novel.title}
@@ -147,6 +135,25 @@ export default function NovelPage() {
               </span>
             )}
           </div>
+          {novel.description && (
+            <p className="text-sm text-gray-600 dark:text-gray-300 mb-4 leading-relaxed whitespace-pre-line">
+              {novel.description}
+            </p>
+          )}
+          {novel.namuUrl && (
+            <a
+              href={novel.namuUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-xs text-blue-600 dark:text-blue-400 hover:underline mr-4"
+            >
+              나무위키
+            </a>
+          )}
+          <div className="flex flex-wrap gap-4 text-sm text-gray-600 dark:text-gray-400 mb-6">
+            <span>총 {novel.totalChapters}화</span>
+            {novel.publisher && <span>출판사: {novel.publisher}</span>}
+          </div>
           <div className="flex justify-end">
             <a
               href={`/api/novels/${encodeURIComponent(novelId)}/epub`}
@@ -155,55 +162,6 @@ export default function NovelPage() {
             >
               EPUB 다운로드
             </a>
-          </div>
-        </div>
-          
-          {/* Metadata Info Cards */}
-          {metadata && (
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
-              {metadata.publisher && (
-                <div className="bg-white dark:bg-gray-800 p-4 rounded-lg shadow">
-                  <p className="text-sm text-gray-500 dark:text-gray-400">출판사</p>
-                  <p className="font-medium text-gray-900 dark:text-white">{metadata.publisher}</p>
-                </div>
-              )}
-              {metadata.year && (
-                <div className="bg-white dark:bg-gray-800 p-4 rounded-lg shadow">
-                  <p className="text-sm text-gray-500 dark:text-gray-400">출간 연도</p>
-                  <p className="font-medium text-gray-900 dark:text-white">{metadata.year}년</p>
-                </div>
-              )}
-              {metadata.isbn13 && (
-                <div className="bg-white dark:bg-gray-800 p-4 rounded-lg shadow">
-                  <p className="text-sm text-gray-500 dark:text-gray-400">ISBN-13</p>
-                  <p className="font-mono text-sm text-gray-900 dark:text-white">{metadata.isbn13}</p>
-                </div>
-              )}
-              {metadata.isbn10 && (
-                <div className="bg-white dark:bg-gray-800 p-4 rounded-lg shadow">
-                  <p className="text-sm text-gray-500 dark:text-gray-400">ISBN-10</p>
-                  <p className="font-mono text-sm text-gray-900 dark:text-white">{metadata.isbn10}</p>
-                </div>
-              )}
-              {metadata.authors.length > 0 && (
-                <div className="bg-white dark:bg-gray-800 p-4 rounded-lg shadow">
-                  <p className="text-sm text-gray-500 dark:text-gray-400">작가</p>
-                  <p className="font-medium text-gray-900 dark:text-white">{metadata.authors.join(", ")}</p>
-                </div>
-              )}
-              {metadata.pageCount && (
-                <div className="bg-white dark:bg-gray-800 p-4 rounded-lg shadow">
-                  <p className="text-sm text-gray-500 dark:text-gray-400">페이지 수</p>
-                  <p className="font-medium text-gray-900 dark:text-white">{metadata.pageCount.toLocaleString()}쪽</p>
-                </div>
-              )}
-            </div>
-          )}
-
-          {/* Local Info */}
-          <div className="flex flex-wrap gap-4 text-sm text-gray-600 dark:text-gray-400 mb-6">
-            <span>총 {novel.totalChapters}화</span>
-            {novel.publisher && <span>출판사: {novel.publisher}</span>}
           </div>
         </div>
 

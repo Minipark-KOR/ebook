@@ -153,10 +153,8 @@ async function proxy(req: NextRequest, slug: string[]) {
     return proxyToNeon(req, slug);
   }
 
-  // image-proxy는 Edge runtime에서 외부 fetch로 직접 처리
-  if (slug[0] === 'novels' && slug[1] === 'image-proxy' && slug.length === 2) {
-    return proxyImageProxy(req);
-  }
+  // image-proxy는 별도 route.ts가 처리 (Node.js runtime)
+  // 여기까지 도달하면 catch-all이 매칭된 것 → devforge로 프록시
 
   const path = slug.join('/');
   const url = `${process.env.NEXT_PUBLIC_API_URL || 'https://devforge.152-69-229-246.nip.io'}/api/${path}${new URL(req.url).search}`;

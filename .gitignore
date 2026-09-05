@@ -55,10 +55,11 @@ scripts/output/
 .coverage
 htmlcov/
 
-# Vercel
-.vercel
-apps/frontend/.vercel
-apps/backend/.vercel
+# Vercel — project.json은 Git에 포함 (배포 링크 유지), env만 제외
+.vercel/*.env*
+.vercel/.env*
+apps/frontend/.vercel/*.env*
+apps/frontend/.vercel/.env*
 
 # Node
 node_modules/

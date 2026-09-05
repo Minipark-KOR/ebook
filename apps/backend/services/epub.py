@@ -19,7 +19,7 @@ import re
 from pathlib import Path
 from typing import Optional, Dict
 
-from ebooklib import epub
+from ebooklib.epub import epub
 
 
 DATA_DIR = Path("/opt/ai_data/flaresolverr/novels")

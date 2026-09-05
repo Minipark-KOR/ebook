@@ -259,6 +259,79 @@ curl https://miniebook.vercel.app/api/chapters/21431 | head -c 200
 - Vercel: Dashboard → Deployments → Logs
 - FlareSolverr: `journalctl --user -u container-flaresolverr.service`
 
+## 자동화 시스템 배포 (ebook-watcher)
+
+`scripts/ebook_watcher/` 3개 파일이 자동 수집 워치를 담당합니다.
+
+### systemd 서비스 등록
+
+**ebook-watcher.service** (`~/.config/systemd/user/`):
+```ini
+[Unit]
+Description=Ebook Watcher — ebook_worker 트리거 (1분마다)
+After=network-online.target svc-pod.service container-flaresolverr.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+Environment=PYTHONPATH=/opt/workspace/ebooklib/scripts/ebook_watcher
+WorkingDirectory=/opt/workspace/ebooklib/scripts/ebook_watcher
+ExecStart=/opt/workspace/ebooklib/apps/backend/venv/bin/python3 /opt/workspace/ebooklib/scripts/ebook_watcher/watchdog.py
+Restart=always
+RestartSec=30
+TimeoutStopSec=60
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=default.target
+```
+
+**ebook-watcher.timer**:
+```ini
+[Unit]
+Description=Ebook Watcher Timer — 15분마다 워커 체크
+After=network-online.target
+
+[Timer]
+OnCalendar=*:0/15
+Persistent=true
+AccuracySec=1min
+
+[Install]
+WantedBy=timers.target
+```
+
+### 등록 명령
+```bash
+systemctl --user daemon-reload
+systemctl --user enable --now ebook-watcher.timer
+
+# 상태 확인
+systemctl --user status ebook-watcher.timer
+systemctl --user list-timers ebook-watcher.timer
+```
+
+### devforge 프로젝트에 ebook-watcher 등록
+
+ebook-watcher를 자동으로 모니터링/복구하려면 `/opt/projects/server/scripts/lib/watchdog/config.py`에 추가:
+
+```python
+SERVICE_TARGETS = [
+    "devforge-turn-watcher",
+    "ebook-watcher",  # ← 추가
+]
+```
+
+이렇게 하면 devforge-watchdog이 60초마다 ebook-watcher 상태를 확인하고 죽으면 자동 재시작합니다.
+
+### 큐 디렉토리 생성
+```bash
+mkdir -p /opt/ai_data/flaresolverr/ebook_watcher
+```
+
+(첫 ebook-watcher.service 실행 시 자동 생성됨)
+
 ## 트러블슈팅
 
 ### EPUB 다운로드가 404
@@ -277,5 +350,14 @@ curl https://miniebook.vercel.app/api/chapters/21431 | head -c 200
 - 원인: svc.pod가 80 PublishPort 포함
 - 해결: svc.pod 정의에서 80/443 제거
 
+### ebook-watcher가 큐를 안 처리함
+- 원인 1: 락 파일 stale (`worker.lock`이 30분 이상 남음)
+ - 해결: `rm /opt/ai_data/flaresolverr/ebook_watcher/worker.lock`
+- 원인 2: FlareSolverr 죽음
+ - 해결: `curl http://127.0.0.1:8191/health` → `systemctl --user restart svc-pod container-flaresolverr`
+- 원인 3: devforge-watchdog이 ebook-watcher 재시작 못함
+ - 해결: `journalctl --user -u devforge-watchdog.service -n 50`
+
 ## 다음 문서
 - [06-MAINTENANCE.md](06-MAINTENANCE.md) - 유지보수 작업
+- [07-AUTOMATION.md](07-AUTOMATION.md) - 자동화 시스템

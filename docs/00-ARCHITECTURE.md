@@ -135,8 +135,12 @@ ebooklib은 한국 웹소설을 자동으로 수집 → DB 저장 → EPUB으로
 │   │   ├── next.config.ts
 │   │   └── package.json
 │   │
-└── scripts/
-    └── json_to_epub.py              # 독립 실행 EPUB 변환기 (레거시)
+├── scripts/
+│   ├── json_to_epub.py              # 독립 실행 EPUB 변환기 (레거시)
+│   └── ebook_watcher/               # 자동 수집 워치독 (큐 기반)
+│       ├── watchdog.py              #   15분마다 큐 체크 + 워커 트리거
+│       ├── ebook_worker.py          #   북토끼 챕터 자동 수집 (rate_limit 내장)
+│       └── ebook_queue.py           #   CLI 큐 관리 (add/list/remove/status)
 ```
 
 ---
@@ -193,8 +197,29 @@ ebooklib은 한국 웹소설을 자동으로 수집 → DB 저장 → EPUB으로
 ## 데이터 라이프사이클
 
 ### 1. 수집 단계
-- 운영자가 일회성으로 북토끼/FlareSolverr로 챕터 수집
-- 또는 miniebook.vercel.app API에서 직접 다운로드 (가장 안정적)
+
+**3가지 수집 방법** (우선순위 순):
+
+1. **자동화 (ebook-watcher)** - 큐에 추가된 챕터를 시스템이 자동 수집
+ - 위치: `/opt/workspace/ebooklib/scripts/ebook_watcher/`
+ - 큐: `/opt/ai_data/flaresolverr/ebook_watcher/queue.json`
+ - 트리거: `ebook-watcher.timer` @ `*:0/15` (15분마다)
+ - 안전장치: 챕터 간 5분 지연, 3회 재시도, 5회 실패 시 큐 제거
+ - 자세한 내용: [07-AUTOMATION.md](07-AUTOMATION.md)
+
+2. **API 직접 다운로드** - miniebook.vercel.app API (가장 안정, 봇 탐지 없음)
+ - 챕터 메타: `GET /api/novels/{id}/chapters?page=N&limit=100`
+ - 챕터 본문: `GET /api/chapters/{wr_id}`
+
+3. **북토끼 직접 크롤링** - FlareSolverr 우회 필요 (rate_limit=True 자동)
+ - 챕터 목록: `services.bookto31.fetch_novel_index(wr_id)`
+ - 챕터 본문: `services.bookto31.fetch_chapter(wr_id)`
+ - 본문 파싱: `services.bookto31.parse_chapter_body(html)`
+
+**권장 워크플로우**:
+- 운영자는 `ebook_queue.py add`로 챕터 추가
+- 시스템이 자동으로 처리 (15분 이내)
+- 실패 시 워치독이 자동 재시작
 
 ### 2. 저장 단계
 - 챕터 JSON 파일을 `/opt/ai_data/flaresolverr/novels/{소설명}/`에 저장
@@ -240,6 +265,19 @@ ebooklib은 한국 웹소설을 자동으로 수집 → DB 저장 → EPUB으로
 
 ---
 
+## 자동화 계층 (3중 보호)
+
+```
+Layer 3: ebook-watcher.timer @ *:0/15     ← 15분마다 워커 트리거
+Layer 2: ebook-watcher.service            ← Restart=always (systemd)
+Layer 1: devforge-watchdog @ 60초마다     ← SERVICE_TARGETS 등록
+Layer 0: systemd Restart=always           ← 워치독도 자동 재시작
+```
+
+자세한 내용: [07-AUTOMATION.md](07-AUTOMATION.md)
+
+---
+
 ## 다음 문서
 - [01-DATA-PIPELINE.md](01-DATA-PIPELINE.md) - 데이터 흐름
 - [02-BOT-BYPASS.md](02-BOT-BYPASS.md) - 봇 탐지 우회
@@ -247,3 +285,4 @@ ebooklib은 한국 웹소설을 자동으로 수집 → DB 저장 → EPUB으로
 - [04-API-REFERENCE.md](04-API-REFERENCE.md) - API 명세
 - [05-DEPLOYMENT.md](05-DEPLOYMENT.md) - 배포
 - [06-MAINTENANCE.md](06-MAINTENANCE.md) - 유지보수
+- [07-AUTOMATION.md](07-AUTOMATION.md) - 자동화 시스템 (ebook-watcher + watchdog)

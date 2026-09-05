@@ -6,9 +6,31 @@
 
 ### 1. 신규 챕터 갱신
 
-**시점**: 주 1-2회 (또는 사용자 요청 시)
+**권장**: ebook-watcher 자동화 시스템 사용 (수동 작업 불필요)
 
-**절차**:
+**자동 워크플로우**:
+```bash
+# 1. 큐에 새 챕터 추가
+python3 /opt/workspace/ebooklib/scripts/ebook_watcher/ebook_queue.py add <wr_id> "소설 제목"
+
+# 예: 하남자의 탑 공략법 새 회차
+python3 /opt/workspace/ebooklib/scripts/ebook_watcher/ebook_queue.py add 21988 "하남자의 탑 공략법"
+
+# 2. (선택) 우선순위 지정 - 낮을수록 먼저 처리
+python3 /opt/workspace/ebooklib/scripts/ebook_watcher/ebook_queue.py add 21988 "하남자의 탑 공략법" 1
+
+# 3. 큐 확인
+python3 /opt/workspace/ebooklib/scripts/ebook_watcher/ebook_queue.py list
+
+# 자동 처리:
+# - ebook-watcher.timer @ *:0/15 → 워커 실행
+# - 북토끼에서 fetch (5분 챕터 간 안전 지연, 재시도 3회)
+# - DB에 저장
+# - status.json에 결과 기록
+# - 5회 실패 시 큐에서 자동 제거
+```
+
+**수동 절차** (자동화 없이 직접 처리):
 ```bash
 # 1. miniebook API로 신규 챕터 확인
 curl -s "https://miniebook.vercel.app/api/novels/하남자의_탑_공략법/chapters?page=1&limit=1" | python3 -c "
@@ -32,6 +54,23 @@ cp "${wr_id}.json" /opt/ai_data/flaresolverr/novels/하남자의_탑_공략법/
 
 # 6. EPUB 재생성 (필요시)
 curl -o updated.epub "https://miniebook.vercel.app/api/novels/.../epub"
+```
+
+**북토끼에서 직접 수집** (FlareSolverr 우회 필요):
+```bash
+cd /opt/workspace/ebooklib/apps/backend
+source venv/bin/activate
+
+python3 << 'PYEOF'
+import sys; sys.path.insert(0, '.')
+from services.bookto31 import fetch_chapter, parse_chapter_body
+
+wr_id = 21988
+html = fetch_chapter(wr_id)  # rate_limit=True 자동
+if html:
+    body = parse_chapter_body(html)
+    print(f"수집: {len(body)} chars")
+PYEOF
 ```
 
 ### 2. EPUB 재생성 (로컬)
@@ -292,22 +331,111 @@ git log --oneline -10
 git remote -v
 ```
 
-## 모니터링 명령어
+## 자동화 시스템 (ebook-watcher) 작업
+
+### 18. 큐 관리 CLI
 
 ```bash
-# 헬스체크
-curl -s https://miniebook.vercel.app/api/health
+# 챕터 추가
+python3 /opt/workspace/ebooklib/scripts/ebook_watcher/ebook_queue.py add <wr_id> "소설 제목"
+
+# 우선순위와 함께 (낮을수록 먼저)
+python3 /opt/workspace/ebooklib/scripts/ebook_watcher/ebook_queue.py add 21988 "제목" 1
+
+# 큐 목록 보기
+python3 /opt/workspace/ebooklib/scripts/ebook_watcher/ebook_queue.py list
+
+# 상태 (마지막 실행 결과)
+python3 /opt/workspace/ebooklib/scripts/ebook_watcher/ebook_queue.py status
+
+# 특정 챕터 제거
+python3 /opt/workspace/ebooklib/scripts/ebook_watcher/ebook_queue.py remove <wr_id>
+
+# 큐 전체 비우기 (주의)
+python3 /opt/workspace/ebooklib/scripts/ebook_watcher/ebook_queue.py clear
+```
+
+### 19. 워처/워커 상태 확인
+
+```bash
+# 타이머 상태 (다음 실행 시각)
+systemctl --user status ebook-watcher.timer
+systemctl --user list-timers ebook-watcher.timer
+
+# 서비스 상태
+systemctl --user status ebook-watcher.service
+
+# 실시간 로그
+journalctl --user -u ebook-watcher.service -f
+
+# 워커 로그 직접
+tail -f /opt/ai_data/flaresolverr/ebook_watcher/watcher.log
+
+# 락 파일 ( stale 체크)
+ls -la /opt/ai_data/flaresolverr/ebook_watcher/worker.lock
+
+# 큐 + 상태
+cat /opt/ai_data/flaresolverr/ebook_watcher/queue.json | python3 -m json.tool
+cat /opt/ai_data/flaresolverr/ebook_watcher/status.json | python3 -m json.tool
+```
+
+### 20. 워커 수동 실행 (테스트)
+
+```bash
+# 큐의 모든 작업을 즉시 처리 (안전 지연 무시)
+cd /opt/workspace/ebooklib/apps/backend
+source venv/bin/activate
+python3 /opt/workspace/ebooklib/scripts/ebook_watcher/ebook_worker.py
+```
+
+### 21. devforge-watchdog 통합 확인
+
+```bash
+# ebook-watcher가 워치독의 SERVICE_TARGETS에 등록되었는지 확인
+grep -A3 "SERVICE_TARGETS" /opt/projects/server/scripts/lib/watchdog/config.py
+
+# 워치독이 ebook-watcher를 자동 재시작한 이력
+journalctl --user -u devforge-watchdog.service | grep -i "ebook"
+```
+
+### 22. 자동화 시스템 트러블슈팅
+
+**증상**: 큐에 작업이 있는데 ebook-watcher가 안 돌음
+
+```bash
+# 1. 락 파일 stale 확인 (30분 이상)
+ls -la /opt/ai_data/flaresolverr/ebook_watcher/worker.lock
+
+# 락이 stale이면 제거
+rm /opt/ai_data/flaresolverr/ebook_watcher/worker.lock
+
+# 2. FlareSolverr 상태
 curl -s http://127.0.0.1:8191/health
 
-# 챕터 수
-ls /opt/ai_data/flaresolverr/novels/*/ | grep ".json$" | wc -l
+# 죽었으면 재시작
+systemctl --user restart svc-pod container-flaresolverr
 
-# rate_limiter 통계
-python3 -c "from lib.rate_limiter import stats; print(stats())"
+# 3. ebook-watcher 자체 재시작
+systemctl --user restart ebook-watcher.service
 
-# FlareSolverr 로그
-journalctl --user -u container-flaresolverr.service --since "1 hour ago"
+# 4. 워치독이 ebook-watcher를 죽었다고 판단하지 않는지 확인
+journalctl --user -u devforge-watchdog.service --since "10 min ago" | grep -i ebook
+```
+
+**증상**: 5회 실패한 챕터가 큐에 계속 남아있음 (정상 동작)
+
+```bash
+# 큐 확인 - attempts가 5 이상이고 last_error가 있으면 자동 제거됨
+python3 -c "
+import json
+with open('/opt/ai_data/flaresolverr/ebook_watcher/queue.json') as f:
+    queue = json.load(f)
+for item in queue:
+    if item.get('attempts', 0) >= 5:
+        print(f\"영구 실패: {item}\")
+"
 ```
 
 ## 다음 문서
 - [00-ARCHITECTURE.md](00-ARCHITECTURE.md) - 시스템 전체 이해
+- [07-AUTOMATION.md](07-AUTOMATION.md) - 자동화 시스템 상세

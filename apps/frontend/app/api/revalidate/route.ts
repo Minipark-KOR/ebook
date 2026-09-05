@@ -5,7 +5,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { revalidatePath, revalidateTag } from "next/cache";
 
-const TOKEN = process.env.VERCEL_REVALIDATE_TOKEN || "dev-insecure-token";
+const TOKEN = process.env.VERCEL_REVALIDATE_TOKEN || "yvu-ruQM7S_Yg1MrtQaIdW3RogjQoBsnZyHkhVVZeE8";
 
 export async function POST(req: NextRequest) {
   // 1) 인증

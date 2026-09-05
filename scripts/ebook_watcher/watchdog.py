@@ -15,6 +15,7 @@ import os
 import subprocess
 import sys
 import time
+import requests
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
@@ -168,5 +169,4 @@ def main():
 
 
 if __name__ == "__main__":
-    import requests  # check_flaresolverr_health에서 사용
     sys.exit(main())

@@ -41,14 +41,9 @@ def _rate_limit_check(url: str) -> None:
     """
     try:
         # lib 패키지가 있으면 사용, 없으면 인라인 구현
-        from lib.rate_limiter import wait_if_needed, record_request
+        from lib.rate_limiter import wait_if_needed
         wait_sec = wait_if_needed(url, interval=_BOOKTO31_INTERVAL, db_path=_RATE_LIMITER_PATH)
         if wait_sec > 0:
-            import asyncio
-            try:
-                asyncio.get_event_loop().run_until_complete(asyncio.sleep(0))
-            except RuntimeError:
-                pass
             import time as _time
             _time.sleep(wait_sec)
     except ImportError:

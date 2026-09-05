@@ -430,8 +430,12 @@ def get_metadata(title: str) -> Optional[Dict]:
 def update_db_and_local(novel_id: str, merged: Dict) -> None:
     """DB + 로컬 meta.json 업데이트."""
     import psycopg2
+    import os
 
-    NEON = "postgresql://neondb_owner:npg_dtpE5bK2eAFv@ep-round-hill-azleavuh.c-3.ap-southeast-1.aws.neon.tech/neondb?sslmode=require"
+    NEON = os.getenv("NEON_DATABASE_URL", "")
+    if not NEON:
+        print("NEON_DATABASE_URL 환경변수 미설정, DB 업데이트 생략")
+        return
     DATA_DIR = Path("/opt/ai_data/flaresolverr/novels")
 
     # DB
@@ -463,8 +467,12 @@ def update_db_and_local(novel_id: str, merged: Dict) -> None:
 def main():
     """DB의 모든 소설에 대해 듀얼 SSOT 메타데이터 수집 + 업데이트."""
     import psycopg2
+    import os
 
-    NEON = "postgresql://neondb_owner:npg_dtpE5bK2eAFv@ep-round-hill-azleavuh.c-3.ap-southeast-1.aws.neon.tech/neondb?sslmode=require"
+    NEON = os.getenv("NEON_DATABASE_URL", "")
+    if not NEON:
+        print("NEON_DATABASE_URL 환경변수 미설정")
+        return
     conn = psycopg2.connect(NEON)
     cur = conn.cursor()
     cur.execute("SELECT id, title FROM ebook_novels ORDER BY id")

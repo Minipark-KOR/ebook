@@ -98,7 +98,13 @@ def main():
 
     novel_main_wr_id = int(sys.argv[1])
     novel_title = sys.argv[2] if len(sys.argv) > 2 else f"소설 {novel_main_wr_id}"
-    max_pages = int(sys.argv[3]) if len(sys.argv) > 3 else 50
+
+    # auto 플래그가 먼저 오고, max_pages는 그 다음
+    auto_mode = len(sys.argv) > 3 and sys.argv[3] == "auto"
+    if auto_mode:
+        max_pages = int(sys.argv[4]) if len(sys.argv) > 4 else 50
+    else:
+        max_pages = int(sys.argv[3]) if len(sys.argv) > 3 else 50
 
     print(f"=== 북토끼 챕터 자동 발견 ===")
     print(f"작품 메인 wr_id: {novel_main_wr_id}")
@@ -114,7 +120,7 @@ def main():
         sys.exit(1)
 
     # 즉시 큐에 추가할지 확인
-    if len(sys.argv) > 3 and sys.argv[3] == "auto":
+    if auto_mode:
         added = add_to_queue(chapters, novel_title)
         print(f"큐에 {added}개 추가됨")
     else:

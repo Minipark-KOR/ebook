@@ -179,7 +179,7 @@ def search_novel_by_title(
         return _search_brave(title, max_results)
 
     try:
-        time.sleep(0.5)
+        time.sleep(0.5)  # Google Books API rate limit 완화
         results = _goom_with_retry(title)
         if not results:
             return []

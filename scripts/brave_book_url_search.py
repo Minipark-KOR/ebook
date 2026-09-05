@@ -36,7 +36,10 @@ if not BRAVE_API_KEY_LIST:
     log.error("BRAVE_API_KEYS 환경변수 없음")
     sys.exit(1)
 
-NEON = "postgresql://neondb_owner:npg_dtpE5bK2eAFv@ep-round-hill-azleavuh.c-3.ap-southeast-1.aws.neon.tech/neondb?sslmode=require"
+NEON = os.getenv("NEON_DATABASE_URL", "")
+if not NEON:
+    log.error("NEON_DATABASE_URL 환경변수 없음")
+    sys.exit(1)
 DATA_DIR = Path("/opt/ai_data/flaresolverr/novels")
 
 key_index = 0

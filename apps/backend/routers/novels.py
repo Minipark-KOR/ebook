@@ -41,7 +41,7 @@ async def image_proxy(url: str = Query(..., description="원본 이미지 URL"))
             detail=f"Domain not allowed: {parsed.netloc}",
         )
 
-    # 이미지 fetch
+    # 이미지 fetch (stream=True → content로 직접 읽어 연결 정리 보장)
     try:
         resp = requests.get(
             url,
@@ -50,19 +50,20 @@ async def image_proxy(url: str = Query(..., description="원본 이미지 URL"))
                 "Referer": "https://namu.wiki/",
             },
             timeout=15,
-            stream=True,
         )
         resp.raise_for_status()
 
         content_type = resp.headers.get("content-type", "image/webp")
+        image_bytes = resp.content
+        resp.close()
 
         # 캐시 헤더 (1일)
         headers = {
             "Cache-Control": "public, max-age=86400, immutable",
         }
 
-        return StreamingResponse(
-            resp.iter_content(chunk_size=8192),
+        return Response(
+            content=image_bytes,
             media_type=content_type,
             headers=headers,
         )

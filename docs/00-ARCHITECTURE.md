@@ -46,7 +46,7 @@ ebooklib은 한국 웹소설을 자동으로 수집 → DB 저장 → EPUB으로
 │  - routers/metadata.py  : /api/metadata/* (Brave/GoogLe/DuckDuckGo) │
 │                                                                  │
 │  - services/data.py      : JSON 파일 읽기                         │
-│  - services/epub.py     : EPUB 생성 (GoNoto 폰트 임베드)            │
+│  - services/epub.py     : EPUB 생성 (한글 4폰트 임베드)            │
 │  - services/bookto31.py : 북토끼 크롤러 (Cloudflare 우회)            │
 │  - services/toki31.py   : 뉴토끼 크롤러 (Residential Proxy)         │
 │  - services/metadata.py : 메타데이터 조회                          │
@@ -94,7 +94,7 @@ ebooklib은 한국 웹소설을 자동으로 수집 → DB 저장 → EPUB으로
 ```
 /opt/workspace/ebooklib/
 ├── README.md                        # 사용자용 간략 가이드
-├── vercel.json                      # Vercel 빌드/라우팅 설정
+├── vercel.json                      # Vercel 빌드/라우팅 설정 (또는 대시보드 설정)
 ├── docs/                            # ← 이 문서들이 있는 곳
 │   ├── 00-ARCHITECTURE.md           # 시스템 전체 (현재 문서)
 │   ├── 01-DATA-PIPELINE.md          # 데이터 흐름
@@ -116,7 +116,7 @@ ebooklib은 한국 웹소설을 자동으로 수집 → DB 저장 → EPUB으로
 │   │   │   └── metadata.py
 │   │   ├── services/                # 비즈니스 로직
 │   │   │   ├── data.py              # JSON 파일 읽기
-│   │   │   ├── epub.py              # EPUB 생성 (GoNoto 폰트 임베드)
+│   │   │   ├── epub.py              # EPUB 생성 (한글 4폰트 임베드)
 │   │   │   ├── bookto31.py          # 북토끼 크롤러
 │   │   │   ├── toki31.py            # 뉴토끼 크롤러
 │   │   │   └── metadata.py          # 메타데이터 검색
@@ -163,7 +163,7 @@ ebooklib은 한국 웹소설을 자동으로 수집 → DB 저장 → EPUB으로
 ┌────────────────────┐    ┌─────────────┐
 │ services/epub.py   │◄───┤ services/   │
 │ - build_epub()     │    │   data.py   │
-│ - GoNoto 폰트 임베드│    │ - JSON 읽기 │
+│ - 4폰트 임베드│    │ - JSON 읽기 │
 └─────────┬──────────┘    └──────┬──────┘
           │                       │
           ▼                       ▼
@@ -231,8 +231,8 @@ ebooklib은 한국 웹소설을 자동으로 수집 → DB 저장 → EPUB으로
 
 ### 4. EPUB 단계
 - 사용자가 "EPUB 다운로드" 클릭 → `/api/novels/{id}/epub`
-- `epub.py`가 DB의 모든 챕터를 모아서 EPUB 바이트 생성 (11MB+)
-- GoNotoCurrent 폰트 임베드 (한글 깨짐 방지)
+- `epub.py`가 DB의 모든 챕터를 모아서 EPUB 바이트 생성 (9MB+, 557화 기준)
+- **4개 한글 폰트 임베드**: NotoSansKR (제목), RIDIBatang (본문), MaruBuri (인용), Literata (영문)
 
 ---
 

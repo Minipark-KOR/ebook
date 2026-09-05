@@ -30,10 +30,6 @@ from typing import Dict, List, Tuple
 # ebooklib 백엔드 경로 추가
 sys.path.insert(0, '/opt/workspace/ebooklib/apps/backend')
 
-# venv 활성화
-VENV_PATH = Path('/opt/workspace/ebooklib/apps/backend/venv/bin')
-if str(VENV_PATH) not in sys.path:
-    sys.path.insert(0, str(VENV_PATH))
 
 
 WATCHER_DIR = Path('/opt/ai_data/flaresolverr/ebook_watcher')
@@ -291,21 +287,26 @@ def save_chapter(wr_id: int, novel_title: str, body: str) -> bool:
         "user_agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36"
     })
 
-    with open(chapter_file, 'w', encoding='utf-8') as f:
-        _json.dump(data, f, ensure_ascii=False, indent=2)
+    # 챕터 파일 저장
+    try:
+        with open(chapter_file, 'w', encoding='utf-8') as f:
+            _json.dump(data, f, ensure_ascii=False, indent=2)
+    except (OSError, IOError) as e:
+        log.error(f"  ✗ 챕터 파일 저장 실패: {e}")
+        return False
 
     # meta.json 생성/업데이트 (소설 첫 챕터인 경우)
     new_novel = False
     meta_file = novel_dir / 'meta.json'
-    if not meta_file.exists():
-        new_novel = True
-        # 새 소설 - namu.wiki로 메타데이터 자동 보강
-        meta = enrich_metadata_from_namu(novel_id, novel_title)
-        with open(meta_file, 'w', encoding='utf-8') as f:
-            _json.dump(meta, f, ensure_ascii=False, indent=2)
-    else:
-        # 기존 meta 업데이트 - totalChapters 카운트
-        try:
+    try:
+        if not meta_file.exists():
+            new_novel = True
+            # 새 소설 - namu.wiki로 메타데이터 자동 보강
+            meta = enrich_metadata_from_namu(novel_id, novel_title)
+            with open(meta_file, 'w', encoding='utf-8') as f:
+                _json.dump(meta, f, ensure_ascii=False, indent=2)
+        else:
+            # 기존 meta 업데이트 - totalChapters 카운트
             with open(meta_file, 'r', encoding='utf-8') as f:
                 meta = _json.load(f)
             chapter_files = list(novel_dir.glob('*.json'))
@@ -314,8 +315,8 @@ def save_chapter(wr_id: int, novel_title: str, body: str) -> bool:
                 meta['totalChapters'] = chapter_count
                 with open(meta_file, 'w', encoding='utf-8') as f:
                     _json.dump(meta, f, ensure_ascii=False, indent=2)
-        except Exception as e:
-            log.warning(f"meta.json 업데이트 실패: {e}")
+    except Exception as e:
+        log.warning(f"meta.json 생성/업데이트 실패: {e}")
 
     log.info(f"  저장 완료: {chapter_file} ({len(body)} chars)")
 
@@ -330,12 +331,12 @@ def save_chapter(wr_id: int, novel_title: str, body: str) -> bool:
         log.warning(f"  ⚠ Neon 동기화 실패 (계속 진행): {e}")
 
     # Vercel 캐시 즉시 갱신 트리거
-    _trigger_vercel_revalidate(novel_id, new_novel)
+    _trigger_vercel_revalidate(novel_id)
 
     return True
 
 
-def _trigger_vercel_revalidate(novel_id: str, is_new_novel: bool = False) -> None:
+def _trigger_vercel_revalidate(novel_id: str) -> None:
     """Vercel ISR 캐시 즉시 갱신.
 
     새 챕터 저장 시 Vercel의 revalidate endpoint 호출.
@@ -344,7 +345,7 @@ def _trigger_vercel_revalidate(novel_id: str, is_new_novel: bool = False) -> Non
     - VERCEL_REVALIDATE_TOKEN: Vercel 측 env에 설정한 토큰
     """
     import os
-    import requests as req
+    import requests
 
     url = os.getenv("VERCEL_REVALIDATE_URL", "").strip()
     token = os.getenv("VERCEL_REVALIDATE_TOKEN", "").strip()
@@ -358,7 +359,7 @@ def _trigger_vercel_revalidate(novel_id: str, is_new_novel: bool = False) -> Non
     tags = ["novels"]
 
     try:
-        resp = req.post(
+        resp = requests.post(
             url,
             json={"paths": paths, "tags": tags},
             headers={

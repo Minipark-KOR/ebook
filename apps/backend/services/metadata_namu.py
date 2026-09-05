@@ -145,10 +145,11 @@ def _fetch_binary(url: str, timeout: int = 30) -> Optional[bytes]:
         html_text = _fetch_with_flaresolverr(url, rate_limit=False)
         if html_text:
             # HTML 응답일 수 있음 (Cloudflare challenge page)
-            # 이미지로 보이려면 시작 바이트 확인
-            if html_text.startswith(b'\x89PNG') or html_text.startswith(b'\xff\xd8\xff') or \
-               html_text.startswith(b'RIFF') or html_text.startswith(b'<?xml'):
-                return html_text
+            # 이미지로 보이려면 시작 바이트 확인 (str → bytes 변환 후 비교)
+            raw = html_text.encode('utf-8') if isinstance(html_text, str) else html_text
+            if raw.startswith(b'\x89PNG') or raw.startswith(b'\xff\xd8\xff') or \
+               raw.startswith(b'RIFF') or raw.startswith(b'<?xml'):
+                return raw
     except Exception:
         pass
 
@@ -398,7 +399,7 @@ def get_metadata(title: str, download_cover_to: Optional[Path] = None) -> Option
 
     # 표지 이미지를 로컬에 다운로드 (옵션)
     if cover_url and download_cover_to is not None:
-        if download_cover_to(
+        if download_cover(
             cover_url, download_cover_to, timeout=30
         ):
             # DB에는 로컬 경로 저장 (백엔드 static mount)

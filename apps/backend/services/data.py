@@ -47,11 +47,22 @@ def get_novel_detail(novel_id: str) -> Optional[dict]:
     novel_dir = DATA_DIR / novel_id
     if not novel_dir.exists():
         return None
-    
+
+    # meta.json이 있으면 우선 사용
+    meta_file = novel_dir / "meta.json"
+    if meta_file.exists():
+        with open(meta_file, "r", encoding="utf-8") as f:
+            meta = json.load(f)
+        # 챕터 수는 실제 파일 기준으로 갱신
+        chapters = list(novel_dir.glob("*.json"))
+        chapter_count = sum(1 for f in chapters if f.stem.isdigit())
+        meta["totalChapters"] = chapter_count
+        return meta
+
     chapters = list(novel_dir.glob("*.json"))
     if not chapters:
         return None
-    
+
     return {
         "id": novel_id,
         "title": novel_id.replace("_", " "),

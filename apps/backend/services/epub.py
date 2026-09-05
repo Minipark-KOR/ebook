@@ -93,7 +93,7 @@ def _build_main_css() -> bytes:
   font-family: "{family}";
   font-weight: 400;
   font-style: normal;
-  src: url("../fonts/{filename}") format("truetype");
+  src: url("../fonts/{filename}") format("{'opentype' if filename.endswith('.otf') else 'truetype'}");
 }}"""
         for filename, family, _ in FONTS
     ])

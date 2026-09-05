@@ -44,9 +44,10 @@ LOG_FILE = WATCHER_DIR / 'watcher.log'
 LOCK_FILE = WATCHER_DIR / 'worker.lock'
 
 # 챕터 간 안전 지연 (북토끼가 클라이언트로 인식하지 않도록)
-CHAPTER_DELAY_SEC = 300  # 5분
+# 일시적으로 단축: 5분 → 1분 (대량 수집 후 다시 5분으로 복원)
+CHAPTER_DELAY_SEC = 60  # 1분
 # 같은 URL에 다시 요청 시 대기 시간
-URL_RETRY_DELAY_SEC = 480  # 8분
+URL_RETRY_DELAY_SEC = 120  # 2분
 
 # 로깅
 logging.basicConfig(

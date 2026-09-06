@@ -56,14 +56,30 @@ def b64url_encode(data: bytes) -> str:
     return base64.b64encode(data).decode().replace("+", "-").replace("/", "_").rstrip("=")
 
 
-def derive_key(nv_cookie: str, episode_ref: str, novel_id: str) -> bytes:
+def derive_key(nv_cookie: str, novel_id: str, episode_id: str) -> bytes:
     """AES-GCM 키 파생.
 
-    JS 코드: SHA-256(nv_cookie_bytes + f":{episode_ref}:{novel_id}:v3".encode())
+    JS 코드 (역공학):
+        let r = [e, new TextEncoder().encode(`:${t}:${n}:v3`)];
+        keyMaterial = r[0] + r[1]  // e (bytes) + ":t:n:v3" (bytes)
+        key = SHA-256(keyMaterial)
+
+    여기서:
+        e = base64url_decode(nv_cookie.split('.')[0])  // nv 쿠키의 첫 부분 디코드
+        t = novelId
+        n = episodeId (episodeRef 아님!)
+
+    주의: 기존 구현과 달리 episodeRef가 아닌 episodeId를 사용.
     """
-    token_bytes = nv_cookie.encode('utf-8') if isinstance(nv_cookie, str) else nv_cookie
-    salt = f":{episode_ref}:{novel_id}:v3".encode('utf-8')
-    combined = token_bytes + salt
+    # nv 쿠키의 첫 부분 (before '.')을 base64url 디코드
+    part1_b64 = nv_cookie.split('.')[0]
+    padding = 4 - len(part1_b64) % 4
+    if padding != 4:
+        part1_b64 += '=' * padding
+    part1_bytes = base64.urlsafe_b64decode(part1_b64)
+
+    salt = f":{novel_id}:{episode_id}:v3".encode('utf-8')
+    combined = part1_bytes + salt
     return hashlib.sha256(combined).digest()
 
 
@@ -144,14 +160,26 @@ async def fetch_chapter_content(
     from playwright.async_api import async_playwright
 
     env = _load_proxy_env()
-    proxy_user = env.get("MASKPROXY_USER", "")
-    proxy_pass = env.get("MASKPROXY_PASS", "")
-    proxy_host = env.get("MASKPROXY_HOST", "gw.maskproxy.io")
-    proxy_port = env.get("MASKPROXY_PORT", "1288")
+    # DataImpulse 우선 (한국 IP targeting 가능), MaskProxy 백업
+    proxy_user = env.get("DATAIMPULSE_USER", "")
+    proxy_pass = env.get("DATAIMPULSE_PASS", "")
+    proxy_host = env.get("DATAIMPULSE_HOST", "gw.dataimpulse.com")
+    proxy_port = env.get("DATAIMPULSE_PORT", "823")
 
     if not proxy_user or not proxy_pass:
-        logger.error("MASKPROXY_USER/MASKPROXY_PASS not set in .env.local")
+        # Fallback to MaskProxy
+        proxy_user = env.get("MASKPROXY_USER", "")
+        proxy_pass = env.get("MASKPROXY_PASS", "")
+        proxy_host = env.get("MASKPROXY_HOST", "gw.maskproxy.io")
+        proxy_port = env.get("MASKPROXY_PORT", "1288")
+
+    if not proxy_user or not proxy_pass:
+        logger.error("Proxy credentials not set in .env.local")
         return None
+
+    # 한국 IP targeting을 위해 country code 추가
+    if "dataimpulse" in proxy_host and "__cr." not in proxy_user:
+        proxy_user = proxy_user + "__cr.kr"
 
     proxy_url = f"http://{proxy_host}:{proxy_port}"
     target_url = f"https://toki31.com/novel/{novel_id}/{chapter_id}"
@@ -266,14 +294,26 @@ async def fetch_chapter_content_full(
     from playwright.async_api import async_playwright
 
     env = _load_proxy_env()
-    proxy_user = env.get("MASKPROXY_USER", "")
-    proxy_pass = env.get("MASKPROXY_PASS", "")
-    proxy_host = env.get("MASKPROXY_HOST", "gw.maskproxy.io")
-    proxy_port = env.get("MASKPROXY_PORT", "1288")
+    # DataImpulse 우선 (한국 IP targeting 가능), MaskProxy 백업
+    proxy_user = env.get("DATAIMPULSE_USER", "")
+    proxy_pass = env.get("DATAIMPULSE_PASS", "")
+    proxy_host = env.get("DATAIMPULSE_HOST", "gw.dataimpulse.com")
+    proxy_port = env.get("DATAIMPULSE_PORT", "823")
 
     if not proxy_user or not proxy_pass:
-        logger.error("MASKPROXY_USER/MASKPROXY_PASS not set in .env.local")
+        # Fallback to MaskProxy
+        proxy_user = env.get("MASKPROXY_USER", "")
+        proxy_pass = env.get("MASKPROXY_PASS", "")
+        proxy_host = env.get("MASKPROXY_HOST", "gw.maskproxy.io")
+        proxy_port = env.get("MASKPROXY_PORT", "1288")
+
+    if not proxy_user or not proxy_pass:
+        logger.error("Proxy credentials not set in .env.local")
         return None
+
+    # 한국 IP targeting을 위해 country code 추가
+    if "dataimpulse" in proxy_host and "__cr." not in proxy_user:
+        proxy_user = proxy_user + "__cr.kr"
 
     proxy_url = f"http://{proxy_host}:{proxy_port}"
     target_url = f"https://toki31.com/novel/{novel_id}/{chapter_id}"
@@ -326,48 +366,12 @@ async def fetch_chapter_content_full(
                 title_text = parts[1].split('|')[0].strip()
 
         # Shadow DOM에서 콘텐츠 추출 시도
-        content_text = await page.evaluate("""
-            () => {
-                // Shadow DOM에서 텍스트 추출
-                const host = document.querySelector('.novel-content')?.parentElement;
-                if (host?.__novelShadow) {
-                    const shadow = host.__novelShadow;
-                    const paragraphs = shadow.querySelectorAll('p');
-                    if (paragraphs.length > 0) {
-                        return Array.from(paragraphs).map(p => p.textContent).join('\\n\\n');
-                    }
-                    return shadow.textContent || '';
-                }
+        # 주의: headless 모드에서는 콘텐츠가 DOM에 렌더링되지 않을 수 있음
+        # 따라서 API intercept + 복호화 방식이 더 안정적
+        content_text = ""
 
-                // fallback: 일반 DOM
-                const viewer = document.querySelector('.novel-viewer');
-                if (viewer) {
-                    const divs = viewer.querySelectorAll('div[style*="novel-font-size"]');
-                    for (const div of divs) {
-                        if (div.textContent.length > 100) {
-                            return div.textContent;
-                        }
-                    }
-                }
-
-                // 모든 긴 텍스트 노드 검색
-                const walker = document.createTreeWalker(
-                    document.body,
-                    NodeFilter.SHOW_TEXT,
-                    null,
-                    false
-                );
-                let best = '';
-                let node;
-                while (node = walker.nextNode()) {
-                    const t = node.textContent.trim();
-                    if (t.length > best.length && /[가-힣]/.test(t) && t.length > 200) {
-                        best = t;
-                    }
-                }
-                return best;
-            }
-        """)
+        # 짧은 대기 후 API intercept 방식으로 진행
+        await page.wait_for_timeout(5000)
 
         # 콘텐츠가 없으면 직접 API 호출 + 복호화 시도
         if not content_text or len(content_text) < 100:
@@ -424,19 +428,25 @@ async def _fetch_via_api_intercept(
     logger.debug(f"Session token: {session_token[:30]}...")
 
     # 3. RSC payload에서 token 추출
+    # toki31 RSC 형식: "token","eyJ..." (이스케이프된 따옴표와 쉼표 구분자)
     rsc_token = await page.evaluate("""
         () => {
             const scripts = document.querySelectorAll('script');
             for (const s of scripts) {
-                const text = s.textContent;
-                const match = text.match(/"token":"([A-Za-z0-9_-]+)"/);
-                if (match) return match[1];
-                // NovelContent附近的token搜索
-                const idx = text.indexOf('NovelContent');
+                const text = s.textContent || '';
+                // 형식 1: "token","ey..." (쉼표 구분자)
+                let m = text.match(/"token","(ey[A-Za-z0-9_.-]+)"/);
+                if (m) return m[1];
+                // 형식 2: "token":"ey..." (콜론 구분자, 이스케이프 가능)
+                m = text.match(/\\?"token\\?":\\?"(ey[A-Za-z0-9_.-]+)\\?"/);
+                if (m) return m[1];
+                // 형식 3: NovelContent 근처 검색
+                const idx = text.indexOf('episodeRef');
                 if (idx > -1) {
-                    const chunk = text.substring(Math.max(0, idx - 2000), idx + 2000);
-                    const m2 = chunk.match(/"token":"([A-Za-z0-9_-]+)"/);
-                    if (m2) return m2[1];
+                    const chunk = text.substring(Math.max(0, idx - 500), idx + 1000);
+                    m = chunk.match(/"token","(ey[A-Za-z0-9_.-]+)"/) ||
+                        chunk.match(/\\?"token\\?":\\?"(ey[A-Za-z0-9_.-]+)\\?"/);
+                    if (m) return m[1];
                 }
             }
             return null;
@@ -508,7 +518,7 @@ async def _fetch_via_api_intercept(
 
     # 6. 복호화
     try:
-        key = derive_key(session_token, chapter_id, novel_id)
+        key = derive_key(session_token, novel_id, chapter_id)
         decrypted = decrypt_payload(payload, key)
         return extract_text_from_content(decrypted)
     except Exception as e:

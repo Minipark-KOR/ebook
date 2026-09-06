@@ -10,7 +10,7 @@
 - 로컬 JSON DB에 저장 (`/opt/ai_data/flaresolverr/novels/`)
 - FastAPI 백엔드 + Next.js 프론트엔드를 Vercel Monorepo로 단일 배포
 - EPUB 다운로드 지원 (한글 폰트 임베드, 어디서나 읽기 가능)
-- 봇 차단 우회: FlareSolverr (헤드리스 브라우저), rate limiter (8분 + ±2분)
+- 봇 차단 우회: FlareSolverr (북토끼), curl_cffi (뉴토끼), rate limiter (8분 + ±2분)
 
 ## 챕터 자동 수집 (간단 사용법)
 
@@ -38,7 +38,6 @@ python3 scripts/ebook_watcher/ebook_queue.py list
 │   │   │   │   └── novel/[id]/        # 소설 상세 + 회차
 │   │   │   └── lib/api.ts             # API 클라이언트 (상대 경로)
 │   │   ├── package.json
-│   │   ├── vercel.json (제거됨 - 루트에서 관리)
 │   │   └── .env.local
 │   │
 │   └── backend/           # FastAPI (Vercel Python Functions)
@@ -49,14 +48,27 @@ python3 scripts/ebook_watcher/ebook_queue.py list
 │       │   └── chapters.py   # /api/novels/{id}/chapters, /api/chapters/{wr_id}
 │       ├── services/
 │       │   ├── metadata.py   # ISBNLib + Brave/DuckDuckGo 메타데이터 조회
+│       │   ├── bookto31.py   # 북토끼 크롤러 (FlareSolverrSession)
+│       │   ├── toki31.py     # 뉴토끼 크롤러 (curl_cffi)
 │       │   └── data.py       # JSON 파일 읽기 서비스
+│       ├── lib/              # 공통 레이어
+│       │   ├── user_agent.py          # Chrome 헤더 빌더
+│       │   ├── flaresolverr_client.py # FlareSolverr 세션 관리
+│       │   ├── curl_session.py        # curl_cffi 세션 팩토리
+│       │   ├── storage.py             # 챕터 저장/메타 관리
+│       │   └── rate_limiter.py        # SQLite rate limiter
 │       ├── requirements.txt
-│       ├── .env
-│       └── vercel.json (제거됨 - 루트에서 관리)
+│       └── .env
 │
 ├── scripts/
-│   ├── json_to_epub.py    # JSON → EPUB 변환기 (독립 실행)
-│   └── output/            # 생성된 EPUB 파일들
+│   ├── ebook_watcher/     # 자동 수집 워치독
+│   │   ├── watchdog.py    # 15분마다 큐 체크 + 워커 트리거
+│   │   ├── ebook_worker.py # 큐 작업 처리 (lib.storage 사용)
+│   │   └── ebook_queue.py # CLI 큐 관리
+│   ├── discover_chapters.py    # 회차 wr_id 자동 발견
+│   ├── dual_metadata_ssot.py   # 문피아/조아라 듀얼 메타데이터
+│   ├── bookto31_healthcheck.py # 북토끼 상태 체크
+│   └── json_to_epub.py    # JSON → EPUB 변환기
 │
 ├── vercel.json            # Monorepo 빌드/라우팅 설정
 ├── .gitignore
@@ -173,6 +185,7 @@ CORS_ORIGINS=["https://miniebook.vercel.app"]  # Vercel에서 자동 처리됨
 - python-dotenv
 - isbnlib>=3.10,<3.12 (Python 3.9 호환)
 - tenacity, requests
+- curl_cffi (TLS fingerprint 위장)
 
 ### Frontend
 - next.js 16, react 19

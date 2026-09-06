@@ -4,6 +4,20 @@
 
 ## 2026-09-06 (최신)
 
+### 공통 레이어 리팩터링 (Phase 1~5 + 잔여 caller 이관)
+- **`lib/user_agent.py`** (신규): Chrome 헤더 빌더 (`chrome_headers()`, `namu_headers()`)
+- **`lib/flaresolverr_client.py`** (신규): `FlareSolverrSession` 클래스 — 세션 관리 + rate limit 연동
+- **`lib/curl_session.py`** (신규): curl_cffi 세션 팩토리 (`create_curl_session(impersonate="chrome131")`)
+- **`lib/storage.py`** (신규): 챕터 저장/메타 관리 (`save_chapter()`, `update_meta_from_namu()`)
+- **`services/bookto31.py`** (리팩터): inline FlareSolverr 로직 → `FlareSolverrSession` 사용 (170줄 제거)
+- **`services/metadata_namu.py`** (리팩터): `from services.bookto31 import _fetch_with_flaresolverr` 제거 → `FlareSolverrSession(rate_limit=False)` 사용
+- **`services/toki31.py`** (재작성): requests+proxy → curl_cffi (`lib.curl_session`) + RSC 파서 추가 (187줄 제거)
+- **`scripts/ebook_watcher/ebook_worker.py`** (리팩터): 저장 로직 → `lib.storage` 사용, health check → `FlareSolverrSession` (79줄 제거)
+- **`scripts/discover_chapters.py`** (리팩터): `bookto31._fetch_with_flaresolverr` → `FlareSolverrSession(rate_limit=False)`
+- **`scripts/dual_metadata_ssot.py`** (리팩터): `bookto31._fetch_with_flaresolverr` → `FlareSolverrSession(rate_limit=False)`
+- **커밋**: `8483f85`(Ph1) → `19df167`(Ph2) → `7602a4c`(Ph3) → `08e5c8b`(Ph4) → `cf9eba7`(Ph5) → `570cd4e`(잔여 caller)
+- **총 코드 감소**: 약 463줄 (인라인 중복 제거 + 공통 레이어 분리)
+
 ### 본문 터치 네비게이션 개선
 - **`chapter/[wr_id]/page.tsx`**: window-level click 이벤트로 변경 (고정 overlay div 제거)
   - 위 15% 터치 → 페이지 업 스크롤 (overlay 없음)

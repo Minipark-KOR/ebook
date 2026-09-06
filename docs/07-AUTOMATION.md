@@ -258,10 +258,12 @@ python3 /opt/workspace/ebooklib/scripts/ebook_watcher/ebook_worker.py
 ### 북토끼 health check
 - `scripts/bookto31_healthcheck.py` - 독립 CLI (북토끼 + 조아라/문피아 응답 확인)
 - `ebook_worker.py:_check_bookto31_alive()` - 10분 캐시로 15분 사이클마다 자동 호출
+  - `FlareSolverrSession(rate_limit=False)` 사용 (lazy init)
 - 죽으면 ebook-watcher가 자동 중단 (recover 안 함, 수동 개입 대기)
 
 ### 자동 발견 + 수집 파이프라인
 1. **수동 또는 Brave Search**: `scripts/discover_chapters.py` - 북토끼 작품 메인 페이지에서 spage 순회, 회차 wr_id 자동 추출 → 큐에 일괄 추가
+   - `FlareSolverrSession(rate_limit=False)` 사용
 2. **ebook-watcher**: 15분마다 큐의 챕터를 북토끼에서 fetch
 3. **북토끼 죽음 시**: ebook-watcher가 자동 중단 + 다음 수동 작업 가능
    - `scripts/discover_chapters.py`의 munpia/joara URL로 직접 fetch

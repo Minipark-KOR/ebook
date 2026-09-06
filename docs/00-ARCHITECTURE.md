@@ -47,10 +47,16 @@ ebooklib은 한국 웹소설을 자동으로 수집 → DB 저장 → EPUB으로
 │                                                                  │
 │  - services/data.py      : JSON 파일 읽기                         │
 │  - services/epub.py     : EPUB 생성 (한글 4폰트 임베드)            │
-│  - services/bookto31.py : 북토끼 크롤러 (Cloudflare 우회)            │
-│  - services/toki31.py   : 뉴토끼 크롤러 (Residential Proxy)         │
+│  - services/bookto31.py : 북토끼 크롤러 (FlareSolverrSession)     │
+│  - services/toki31.py   : 뉴토끼 크롤러 (curl_cffi)               │
 │  - services/metadata.py : 메타데이터 조회                          │
-│  - lib/rate_limiter.py  : 8분 + ±2분 jitter rate limiting            │
+│                                                                  │
+│  - lib/                  : 공통 레이어                              │
+│    - lib/user_agent.py          : Chrome 헤더 빌더                │
+│    - lib/flaresolverr_client.py : FlareSolverr 세션 관리          │
+│    - lib/curl_session.py        : curl_cffi 세션 팩토리           │
+│    - lib/storage.py             : 챕터 저장/메타 관리              │
+│    - lib/rate_limiter.py        : SQLite rate limiter             │
 └─────────────────────────────────────────────────────────────────┘
             │
             │ 파일 읽기 (data.py → glob)
@@ -102,12 +108,14 @@ ebooklib은 한국 웹소설을 자동으로 수집 → DB 저장 → EPUB으로
 │   ├── 03-EPUB-GENERATION.md        # EPUB 생성
 │   ├── 04-API-REFERENCE.md          # REST API 명세
 │   ├── 05-DEPLOYMENT.md             # 배포 가이드
-│   └── 06-MAINTENANCE.md            # 유지보수 작업
+│   ├── 06-MAINTENANCE.md            # 유지보수 작업
+│   ├── 07-AUTOMATION.md             # 자동화 시스템
+│   ├── 08-TOKI31-ANALYSIS.md        # 토끼31 분석
+│   └── 09-REFACTORING-PLAN.md       # 리팩터링 계획 (완료)
 │
 ├── apps/
 │   ├── backend/                     # FastAPI Python 서버
 │   │   ├── main.py                  # 엔트리포인트 (라우터 등록)
-│   │   ├── vercel.json → 없음 (루트 사용)
 │   │   ├── requirements.txt
 │   │   ├── .env                     # 환경변수 (CORS_ORIGINS 등)
 │   │   ├── routers/                 # API 엔드포인트 정의
@@ -117,11 +125,17 @@ ebooklib은 한국 웹소설을 자동으로 수집 → DB 저장 → EPUB으로
 │   │   ├── services/                # 비즈니스 로직
 │   │   │   ├── data.py              # JSON 파일 읽기
 │   │   │   ├── epub.py              # EPUB 생성 (한글 4폰트 임베드)
-│   │   │   ├── bookto31.py          # 북토끼 크롤러
-│   │   │   ├── toki31.py            # 뉴토끼 크롤러
-│   │   │   └── metadata.py          # 메타데이터 검색
-│   │   └── lib/
-│   │       └── rate_limiter.py      # 8분 + ±2분 jitter rate limiter
+│   │   │   ├── bookto31.py          # 북토끼 크롤러 (FlareSolverrSession)
+│   │   │   ├── toki31.py            # 뉴토끼 크롤러 (curl_cffi)
+│   │   │   ├── metadata.py          # 메타데이터 검색
+│   │   │   └── metadata_namu.py     # namu.wiki 메타데이터
+│   │   └── lib/                     # 공통 레이어
+│   │       ├── __init__.py
+│   │       ├── user_agent.py        # Chrome 헤더 빌더
+│   │       ├── flaresolverr_client.py # FlareSolverr 세션 관리
+│   │       ├── curl_session.py      # curl_cffi 세션 팩토리
+│   │       ├── storage.py           # 챕터 저장/메타 관리
+│   │       └── rate_limiter.py      # SQLite rate limiter
 │   │
 │   ├── frontend/                    # Next.js 16 + React 19
 │   │   ├── app/
@@ -136,11 +150,14 @@ ebooklib은 한국 웹소설을 자동으로 수집 → DB 저장 → EPUB으로
 │   │   └── package.json
 │   │
 ├── scripts/
-│   ├── json_to_epub.py              # 독립 실행 EPUB 변환기 (레거시)
-│   └── ebook_watcher/               # 자동 수집 워치독 (큐 기반)
-│       ├── watchdog.py              #   15분마다 큐 체크 + 워커 트리거
-│       ├── ebook_worker.py          #   북토끼 챕터 자동 수집 (rate_limit 내장)
-│       └── ebook_queue.py           #   CLI 큐 관리 (add/list/remove/status)
+│   ├── json_to_epub.py              # 독립 실행 EPUB 변환기
+│   ├── ebook_watcher/               # 자동 수집 워치독 (큐 기반)
+│   │   ├── watchdog.py              #   15분마다 큐 체크 + 워커 트리거
+│   │   ├── ebook_worker.py          #   북토끼 챕터 자동 수집 (lib.storage 사용)
+│   │   └── ebook_queue.py           #   CLI 큐 관리 (add/list/remove/status)
+│   ├── discover_chapters.py         # 회차 wr_id 자동 발견
+│   ├── dual_metadata_ssot.py        # 문피아/조아라 듀얼 메타데이터
+│   └── bookto31_healthcheck.py      # 북토끼 상태 체크
 ```
 
 ---
@@ -181,6 +198,12 @@ ebooklib은 한국 웹소설을 자동으로 수집 → DB 저장 → EPUB으로
           │ HTTP POST /v1
           ▼
 ┌────────────────────┐
+│ lib/flaresolverr_  │ ← FlareSolverrSession
+│ client.py          │    (세션 관리 + rate limit)
+└─────────┬──────────┘
+          │
+          ▼
+┌────────────────────┐
 │ FlareSolverr (127  │ ← 헤드리스 브라우저
 │ .0.0.1:8191)       │    (Playwright + Chromium)
 └─────────┬──────────┘
@@ -189,6 +212,26 @@ ebooklib은 한국 웹소설을 자동으로 수집 → DB 저장 → EPUB으로
 ┌────────────────────┐
 │ bookto31.com       │ ← Cloudflare Turnstile
 │ (북토끼)            │
+└────────────────────┘
+```
+
+```
+┌────────────────────┐
+│ services/toki31.py │
+│ - 뉴토끼 크롤러     │
+└─────────┬──────────┘
+          │
+          ▼
+┌────────────────────┐
+│ lib/curl_session.py│ ← curl_cffi (TLS 위장)
+│ - create_curl_     │    impersonate="chrome131"
+│   session()        │
+└─────────┬──────────┘
+          │
+          ▼
+┌────────────────────┐
+│ toki31.com         │ ← CloudFront + Next.js
+│ (뉴토끼)            │
 └────────────────────┘
 ```
 
@@ -245,6 +288,7 @@ ebooklib은 한국 웹소설을 자동으로 수집 → DB 저장 → EPUB으로
 - **ebooklib** - EPUB 생성
 - **lxml** - HTML/XML 파싱 (ebooklib 의존성)
 - **requests** - HTTP 클라이언트
+- **curl_cffi** - TLS fingerprint 위장 (뉴토끼 우회)
 
 ### 프론트엔드
 - **Next.js 16** - React 풀스택 프레임워크
@@ -260,6 +304,7 @@ ebooklib은 한국 웹소설을 자동으로 수집 → DB 저장 → EPUB으로
 
 ### 외부 의존성
 - **FlareSolverr** - 헤드리스 브라우저 (ghcr.io/flaresolverr/flaresolverr:latest) - **북토끼 우회**
+- **curl_cffi** - TLS fingerprint 위장 (chrome131 impersonation) - **뉴토끼 우회**
 - **Cloudflare** - WAF / CDN / Turnstile
 - **북토끼** (bookto31.com) - **챕터 본문** SSOT
 - **문피아** (munpia.com) - **메타데이터** SSOT (Brave Search로 URL 검색)

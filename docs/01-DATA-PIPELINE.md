@@ -48,33 +48,50 @@ miniebook.vercel.app     ─┘                                  novels/{소설�
 ### 2.1 services/bookto31.py - 북토끼 크롤러
 
 **함수**:
+- `fetch_home()` - 북토끼 홈 페이지
 - `fetch_novel_index(wr_id: int)` - 작품 메인 페이지 (회차 목록)
+- `fetch_search(q: str)` - 검색 결과 페이지
 - `fetch_chapter(wr_id: int)` - 회차 본문 페이지 (HTML)
-- `_fetch_with_flaresolverr(url, rate_limit=True)` - FlareSolverr로 challenge 우회
+- `_fetch_with_flaresolverr(url, rate_limit=True)` - FlareSolverr로 challenge 우회 (public API 유지)
 - `parse_chapter_list(html, novel_id)` - 작품 페이지에서 회차 목록 추출
 - `parse_chapter_body(html)` - 회차 본문 추출 (`view-content book-text-viewer`)
 - `parse_novel_meta(html)` - 제목/작가/설명 추출
 
 **Rate limiting**:
-- 기본 `rate_limit=True`: 같은 URL에 8분 + ±2분 jitter 자동 대기
-- `rate_limit=False`: 일괄 수집 시 외부에서 `record_request()` 수동 호출
+- `FlareSolverrSession(rate_limit=True)` (기본값): 같은 URL에 8분 + ±2분 jitter 자동 대기
+- `FlareSolverrSession(rate_limit=False)`: namu.wiki, discover_chapters 등에서 사용
 
 **FlareSolverr 통신**:
 ```python
-POST http://127.0.0.1:8191/v1
-{
-  "cmd": "request.get",
-  "url": "https://bookto31.com/...",
-  "maxTimeout": 60000,
-  "session": "<session_id>"  # 재사용 시
-}
-→ {"solution": {"status": 200, "response": "<HTML>", "cookies": [...]}}
+# lib/flaresolverr_client.py의 FlareSolverrSession 사용
+from lib.flaresolverr_client import FlareSolverrSession
+
+_fs = FlareSolverrSession(rate_limit=True)
+html = _fs.fetch("https://bookto31.com/...")
 ```
 
-### 2.2 services/toki31.py - 뉴토끼 크롤러 (비활성)
-- 무료 KR 프록시 리스트 자동 갱신 (proxyscrape.com)
-- Residential proxy failover
-- CloudFront ASN 차단 우회 (KR_ONLY 일부 실패)
+### 2.2 services/toki31.py - 뉴토끼 크롤러
+
+**변경 이력 (2026-09-06)**:
+- requests+proxy → curl_cffi (TLS fingerprint 위장)
+- proxy pool 관리 로직 전체 제거
+- Next.js RSC payload 파서 추가
+
+**함수**:
+- `fetch_home()` - 뉴토끼 홈 페이지
+- `fetch_ing()` - 연재중 웹툰/소설 목록
+- `fetch_novel_list()` - 소설 목록
+- `parse_rsc_payload(html)` - RSC payload에서 에피소드 데이터 추출
+- `extract_episode_data(html)` - 에피소드 데이터 추출
+
+**curl_cffi 사용**:
+```python
+# lib/curl_session.py의 create_curl_session 사용
+from lib.curl_session import create_curl_session
+
+_session = create_curl_session(impersonate="chrome131")
+resp = _session.get("https://toki31.com/novel", timeout=15)
+```
 
 ### 2.3 services/data.py - 데이터 읽기
 
@@ -175,7 +192,23 @@ chapters = parse_chapter_list(index_html, novel_id=21430)
 for ch in chapters:
     html = fetch_chapter(ch['wr_id'])  # 같은 URL → 자동 대기
     body = parse_chapter_body(html)
-    # JSON 저장...
+    # lib.storage.save_chapter()로 저장...
+```
+
+```python
+# lib.storage를 사용한 저장
+from lib.storage import save_chapter, update_meta_from_namu
+
+# 챕터 저장
+save_chapter("오늘만_사는_기사", wr_id=25575, body="본문...", source="bookto31")
+
+# namu.wiki 메타데이터 업데이트
+update_meta_from_namu("오늘만_사는_기사", {
+    "author": "작가명",
+    "description": "소개글",
+    "genre": ["판타지"],
+    "status": "연재중",
+})
 ```
 
 ## 7. 데이터 무결성 보장

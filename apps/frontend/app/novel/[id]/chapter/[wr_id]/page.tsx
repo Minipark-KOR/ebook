@@ -19,8 +19,7 @@ export default function ChapterPage() {
   const [listPage, setListPage] = useState<number | null>(null);
   const [fontSize, setFontSize] = useState(18);
   const [navOpen, setNavOpen] = useState(false);
-  const [touchStartY, setTouchStartY] = useState(0);
-  const [touchStartX, setTouchStartX] = useState(0);
+  const contentRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     if (!wrId) return;
@@ -64,7 +63,7 @@ export default function ChapterPage() {
     return `/novel/${novelId}${qs ? `?${qs}` : ""}`;
   }
 
-  // 화면 터치/클릭: 위쪽 40% = 이전화, 아래쪽 40% = 다음화, 가운데 20% = 회차목록
+  // 화면 터치/클릭: 위쪽 15% = 위로 스크롤, 아래쪽 15% = 아래로 스크롤, 가운데 = 회차목록
   const handleTap = useCallback(
     (e: React.MouseEvent<HTMLDivElement>) => {
       const rect = e.currentTarget.getBoundingClientRect();
@@ -72,15 +71,17 @@ export default function ChapterPage() {
       const h = rect.height;
       const ratio = y / h;
 
-      if (ratio < 0.4) {
-        if (chapter?.prevChapter) goPrev();
-      } else if (ratio > 0.6) {
-        if (chapter?.nextChapter) goNext();
+      if (ratio < 0.15) {
+        // 위쪽 15%: 위로 스크롤 (이전 내용)
+        window.scrollBy({ top: -window.innerHeight * 0.8, behavior: "smooth" });
+      } else if (ratio > 0.85) {
+        // 아래쪽 15%: 아래로 스크롤 (다음 내용)
+        window.scrollBy({ top: window.innerHeight * 0.8, behavior: "smooth" });
       } else {
         setNavOpen((v) => !v);
       }
     },
-    [chapter, goPrev, goNext]
+    []
   );
 
   if (loading) {
@@ -188,27 +189,24 @@ export default function ChapterPage() {
         </div>
       </div>
 
-      {/* 터치 네비게이션 레이어 — 화면 전체를 3분할 (pointer-events-none으로 본문 클릭 통과) */}
+      {/* 터치 네비게이션 레이어 — 화면 상하 15%만 (pointer-events-none으로 본문 클릭 통과) */}
       <nav
         className="fixed inset-0 z-0 flex flex-col pointer-events-none"
         onClick={handleTap}
       >
-        {/* 위쪽 40%: 이전화 */}
+        {/* 위쪽 15%: 위로 스크롤 */}
         <div
-          className="h-[40%] pointer-events-auto cursor-pointer"
-          title="이전 화"
+          className="h-[15%] pointer-events-auto cursor-pointer"
+          title="위로 스크롤"
         />
 
-        {/* 가운데 20%: 회차목록 (한 번 더 누르면 overlay) */}
-        <div
-          className="h-[20%] pointer-events-auto cursor-pointer"
-          title="회차 목록"
-        />
+        {/* 가운데 70%: 회차목록 overlay */}
+        <div className="flex-1 pointer-events-auto cursor-pointer" />
 
-        {/* 아래쪽 40%: 다음화 */}
+        {/* 아래쪽 15%: 아래로 스크롤 */}
         <div
-          className="h-[40%] pointer-events-auto cursor-pointer"
-          title="다음 화"
+          className="h-[15%] pointer-events-auto cursor-pointer"
+          title="아래로 스크롤"
         />
       </nav>
 

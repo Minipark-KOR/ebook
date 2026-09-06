@@ -63,7 +63,7 @@ export default function ChapterPage() {
     return `/novel/${novelId}${qs ? `?${qs}` : ""}`;
   }
 
-  // 화면 터치: overlay는 항상 토글. 위 15% = 페이지 업, 아래 15% = 페이지 다운
+  // 화면 터치: 위 15% = 페이지 업, 아래 15% = 페이지 다운, 가운데 = overlay 토글
   const handleTap = useCallback(
     (e: React.MouseEvent<HTMLDivElement>) => {
       const rect = e.currentTarget.getBoundingClientRect();
@@ -72,14 +72,15 @@ export default function ChapterPage() {
       const ratio = y / h;
 
       if (ratio < 0.15) {
-        // 위쪽 15%: 페이지 업 (이전 내용)
+        // 위쪽 15%: 페이지 업 (이전 내용만, overlay 없음)
         window.scrollBy({ top: -window.innerHeight * 0.8, behavior: "smooth" });
       } else if (ratio > 0.85) {
-        // 아래쪽 15%: 페이지 다운 (다음 내용)
+        // 아래쪽 15%: 페이지 다운 (다음 내용만, overlay 없음)
         window.scrollBy({ top: window.innerHeight * 0.8, behavior: "smooth" });
+      } else {
+        // 가운데: overlay 토글
+        setNavOpen((v) => !v);
       }
-      // overlay는 항상 토글
-      setNavOpen((v) => !v);
     },
     []
   );

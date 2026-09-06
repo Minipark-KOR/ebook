@@ -13,7 +13,7 @@ ebooklib 시스템은 **3중 보호 계층**으로 자동 운영됩니다:
          ↓ 죽으면
 [ Layer 1: devforge-watchdog @ 60초마다 ]  ← 서비스 상태 체크 + 자동 재시작
          ↓ 죽으면
-[ Layer 0: systemd Restart=always ]         ← 워치독 자체도 자동 재시작
+[ Layer 0: systemd timer (*:0/15) ]         ← 15분마다 워커 트리거 (Type=oneshot, Restart=no)
 ```
 
 ## 컴포넌트
@@ -23,7 +23,7 @@ ebooklib 시스템은 **3중 보호 계층**으로 자동 운영됩니다:
 **위치**: `/opt/workspace/ebooklib/scripts/ebook_watcher/`
 
 **파일**:
-- `watchdog.py` - 메인 트리거. 1분마다 (또는 timer가 호출) 큐 체크 후 워커 실행
+- `watchdog.py` - 메인 트리거. timer(15분)가 호출 시 큐 체크 후 워커 실행
 - `ebook_worker.py` - 큐 작업을 실제로 처리 (북토끼 챕터 수집)
 - `ebook_queue.py` - CLI 큐 관리 도구
 

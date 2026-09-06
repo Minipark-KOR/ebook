@@ -207,6 +207,8 @@ blockquote {
     ├── content.opf                   # 패키지 매니페스트
     ├── nav.xhtml                      # 탐색 (목차)
     ├── ncx.xml                        # EPUB 2 호환용 목차
+    ├── cover.webp                     # 표지 이미지 (16KB)
+    ├── cover.xhtml                    # 표지 페이지 (spine 첫 번째)
     ├── fonts/
     │   ├── NotoSansKR-Regular.ttf      # 한글 고딕 (6MB)
     │   ├── RIDIBatang.otf              # 한글 세리프 (1.4MB)

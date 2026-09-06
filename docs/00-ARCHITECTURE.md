@@ -208,7 +208,7 @@ ebooklib은 한국 웹소설을 자동으로 수집 → DB 저장 → EPUB으로
  - 자세한 내용: [07-AUTOMATION.md](07-AUTOMATION.md)
 
 2. **API 직접 다운로드** - miniebook.vercel.app API (가장 안정, 봇 탐지 없음)
- - 챕터 메타: `GET /api/novels/{id}/chapters?page=N&limit=100`
+ - 챕터 메타: `GET /api/novels/{id}/chapters?page=N&limit=20`
  - 챕터 본문: `GET /api/chapters/{wr_id}`
 
 3. **북토끼 직접 크롤링** - FlareSolverr 우회 필요 (rate_limit=True 자동)
@@ -264,7 +264,7 @@ ebooklib은 한국 웹소설을 자동으로 수집 → DB 저장 → EPUB으로
 - **북토끼** (bookto31.com) - **챕터 본문** SSOT
 - **문피아** (munpia.com) - **메타데이터** SSOT (Brave Search로 URL 검색)
 - **조아라** (joara.com) - **메타데이터** SSOT (보조)
-- **namu.wiki** - **표지 이미지** 백업
+- **namu.wiki** - **표지 이미지** 백업 (devforge 백엔드 경유 image-proxy)
 - **Neon** (PostgreSQL 16) - Vercel 측 직접 조회 DB
 - **4개 한글 폰트** - NotoSansKR (제목), RIDIBatang (본문), MaruBuri (인용), Literata (영문)
 

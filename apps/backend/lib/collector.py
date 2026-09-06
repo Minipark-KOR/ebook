@@ -227,7 +227,21 @@ class ChapterCollector:
                 except Exception:
                     pass
 
-        page.on("response", on_response)
+        # novel-content API 응답 대기 (asyncio.Event 기반, 최대 15s)
+        # 응답 JSON 파싱까지 완료된 시점을 감지하여 지연 최소화
+        response_event = asyncio.Event()
+
+        async def _waiting_on_response(response):
+            if "/api/novel-content" in response.url and not content_payload.get("data"):
+                try:
+                    data = await response.json()
+                    if data.get("ok") and data.get("payload"):
+                        content_payload["data"] = data
+                        response_event.set()
+                except Exception:
+                    pass
+
+        page.on("response", _waiting_on_response)
 
         # 페이지 로드
         loaded = await self.navigate(target_url)
@@ -235,14 +249,12 @@ class ChapterCollector:
             logger.error(f"  페이지 로드 실패: {target_url}")
             return None
 
-        # 제목 (페이지 타이틀)
-        # - 추출된 title_text는 필요시 caller에서 사용
-
-        # novel-content API 응답 대기
-        for _ in range(25):
-            if content_payload.get("data"):
-                break
-            await page.wait_for_timeout(1000)
+        # novel-content API 응답 대기 (이미 수신되었으면 즉시 진행)
+        if not content_payload.get("data"):
+            try:
+                await asyncio.wait_for(response_event.wait(), timeout=15)
+            except asyncio.TimeoutError:
+                pass
 
         if not content_payload.get("data"):
             logger.error(f"  novel-content API 응답 없음: {target_url}")

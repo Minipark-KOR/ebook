@@ -1,6 +1,9 @@
 # 봇 탐지 우회 전략
 
 > Cloudflare, CloudFront, ASN 차단 등을 우회하는 방법.
+>
+> ⚠️ **toki31.com (뉴토끼) 보안 구조 변경됨**: 2026-09-06 재분석 결과, CloudFront → Cloudflare + Next.js RSC로 전환.
+> 자세한 분석은 [08-TOKI31-ANALYSIS.md](08-TOKI31-ANALYSIS.md) 참조.
 
 ## 우회 방법 요약
 

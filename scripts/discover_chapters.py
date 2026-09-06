@@ -18,8 +18,10 @@ from pathlib import Path
 
 # 경로 설정
 sys.path.insert(0, '/opt/workspace/ebooklib/apps/backend')
-from services import bookto31
+from lib.flaresolverr_client import FlareSolverrSession
 from services.bookto31 import extract_chapter_wr_ids_from_index
+
+_fs = FlareSolverrSession(rate_limit=False)
 
 
 def discover_chapters(novel_main_wr_id: int, novel_title: str, max_pages: int = 50):
@@ -39,7 +41,7 @@ def discover_chapters(novel_main_wr_id: int, novel_title: str, max_pages: int = 
     for spage in range(1, max_pages + 1):
         url = f"https://bookto31.com/bbs/board.php?bo_table=novel&wr_id={novel_main_wr_id}&spage={spage}"
         try:
-            html = bookto31._fetch_with_flaresolverr(url, rate_limit=False)
+            html = _fs.fetch(url)
         except Exception as e:
             print(f"[오류] spage={spage}: {e}")
             break

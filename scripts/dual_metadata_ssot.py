@@ -28,13 +28,15 @@ from urllib.parse import quote
 import requests
 
 sys.path.insert(0, '/opt/workspace/ebooklib/apps/backend')
-from services import bookto31
+from lib.flaresolverr_client import FlareSolverrSession
 
 logging.basicConfig(level=logging.INFO, format="%(message)s")
 log = logging.getLogger("dual_metadata_ssot")
 
 CACHE_DIR = Path("/opt/ai_data/flaresolverr/dual_metadata_cache")
 CACHE_DIR.mkdir(parents=True, exist_ok=True)
+
+_fs = FlareSolverrSession(rate_limit=False)
 
 
 def _cached_get(url: str, ttl: int = 86400) -> Optional[str]:
@@ -47,7 +49,7 @@ def _cached_get(url: str, ttl: int = 86400) -> Optional[str]:
 
     # 1초 대기 (rate limit)
     time.sleep(1)
-    html = bookto31._fetch_with_flaresolverr(url, rate_limit=False)
+    html = _fs.fetch(url)
     if html:
         cache_key.write_text(html, encoding="utf-8", errors="ignore")
     return html

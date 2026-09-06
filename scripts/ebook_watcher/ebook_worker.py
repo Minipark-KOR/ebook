@@ -222,23 +222,28 @@ _BOOKTO31_LAST_CHECK = 0
 _BOOKTO31_LAST_OK = True
 BOOKTO31_CHECK_INTERVAL = 600  # 10분마다 health check
 
+_fs = None
+
 
 def _check_bookto31_alive() -> bool:
     """북토끼 health check (캐시: 10분마다 한 번만).
 
-    bookto31._fetch_with_flaresolverr(rate_limit=False)를 사용해
-    Cloudflare 우회 후 판단. rate_limit=False: health check는
-    실제 데이터 수집이 아니므로 rate limiter를 우회한다.
+    FlareSolverrSession(rate_limit=False)로 Cloudflare 우회 후 판단.
+    rate_limit=False: health check는 실제 데이터 수집이 아니므로
+    rate limiter를 우회한다.
     """
-    global _BOOKTO31_LAST_CHECK, _BOOKTO31_LAST_OK
+    global _BOOKTO31_LAST_CHECK, _BOOKTO31_LAST_OK, _fs
     now = time.time()
     if now - _BOOKTO31_LAST_CHECK < BOOKTO31_CHECK_INTERVAL:
         return _BOOKTO31_LAST_OK
     _BOOKTO31_LAST_CHECK = now
 
     try:
-        from services import bookto31
-        html = bookto31._fetch_with_flaresolverr(bookto31.BASE_URL + "/", rate_limit=False)
+        if _fs is None:
+            from lib.flaresolverr_client import FlareSolverrSession
+            _fs = FlareSolverrSession(rate_limit=False)
+        from services.bookto31 import BASE_URL
+        html = _fs.fetch(BASE_URL + "/")
         _BOOKTO31_LAST_OK = html is not None and len(html) > 1000
     except Exception:
         _BOOKTO31_LAST_OK = False

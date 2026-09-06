@@ -17,10 +17,9 @@
 - Playwright 기반 챕터 본문 추출 (lib.toki31_playwright)
 """
 
-import asyncio
 import logging
 import re
-from typing import Optional, Union, List, Dict, Tuple
+from typing import Optional, Union, List, Dict
 
 from lib.proxy_session import (
     get_proxy_session_with_fallback,
@@ -62,32 +61,6 @@ def fetch_chapter(novel_id: Union[int, str], chapter_id: Union[int, str]) -> Opt
     return _get(f"{BASE_URL}/novel/{novel_id}/{chapter_id}")
 
 
-def fetch_chapter_content(novel_id: Union[int, str], chapter_id: Union[int, str]) -> Optional[Tuple[str, str]]:
-    """소설 본문 텍스트 추출 (Playwright 사용).
-
-    Returns:
-        (title, content_text) or None on failure
-    """
-    from lib.toki31_playwright import fetch_chapter_content_full
-
-    try:
-        loop = asyncio.get_event_loop()
-        if loop.is_running():
-            # 이미 이벤트 루프가 실행 중인 경우 (FastAPI 등)
-            import concurrent.futures
-            with concurrent.futures.ThreadPoolExecutor() as pool:
-                future = pool.submit(
-                    asyncio.run,
-                    fetch_chapter_content_full(str(novel_id), str(chapter_id))
-                )
-                return future.result(timeout=120)
-        else:
-            return loop.run_until_complete(
-                fetch_chapter_content_full(str(novel_id), str(chapter_id))
-            )
-    except Exception as e:
-        logger.error(f"Chapter content fetch failed: {e}")
-        return None
 
 
 def _get(url: str, timeout: int = 15) -> Optional[str]:

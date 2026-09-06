@@ -154,8 +154,8 @@ async def fetch_chapter_content_full(
 ) -> Optional[Tuple[str, str]]:
     """Playwright로 toki31 챕터 콘텐츠 완전 추출.
 
-    브라우저가 ad-ack을 처리하고 콘텐츠를 렌더링할 때까지 기다린 후,
-    DOM에서 직접 텍스트를 추출합니다.
+    ad-ack 처리 + API intercept + AES-GCM 복호화를 순차 진행.
+    novel-content API 응답을 인터셉트하여 복호화한다.
 
     Returns:
         (title, content_text) or None on failure
@@ -204,6 +204,21 @@ async def fetch_chapter_content_full(
         )
         page = await context.new_page()
 
+        # novel-content API 응답을 인터셉트 (goto 전에 설정)
+        content_payload = {}
+
+        async def on_response(response):
+            if '/api/novel-content' in response.url:
+                try:
+                    data = await response.json()
+                    if data.get('ok') and data.get('payload'):
+                        content_payload['data'] = data
+                        logger.debug("novel-content response captured")
+                except Exception:
+                    pass
+
+        page.on("response", on_response)
+
         # 페이지 로드 (재시도 포함)
         loaded = False
         for attempt in range(3):
@@ -222,30 +237,52 @@ async def fetch_chapter_content_full(
             await browser.close()
             return None
 
-        # ad-ack 완료 + 콘텐츠 렌더링 대기
-        # NovelContent 컴포넌트가 콘텐츠를 Shadow DOM에 렌더링함
-        logger.info(f"Waiting for content render on {target_url}...")
-        await page.wait_for_timeout(20000)
-
-        # 제목 추출
+        # 제목 추출 (페이지 타이틀)
         title_text = await page.title()
         if ' - ' in title_text:
             parts = title_text.split(' - ')
             if len(parts) >= 2:
                 title_text = parts[1].split('|')[0].strip()
 
-        # Shadow DOM에서 콘텐츠 추출 시도
-        # 주의: headless 모드에서는 콘텐츠가 DOM에 렌더링되지 않을 수 있음
-        # 따라서 API intercept + 복호화 방식이 더 안정적
-        content_text = ""
+        # novel-content API 응답 대기 (ad-ack 완료 후 브라우저가 자동 호출)
+        for _ in range(25):
+            if content_payload.get('data'):
+                break
+            await page.wait_for_timeout(1000)
 
-        # 짧은 대기 후 API intercept 방식으로 진행
-        await page.wait_for_timeout(5000)
+        if not content_payload.get('data'):
+            logger.error("novel-content API response not received within 25s")
+            await browser.close()
+            return None
 
-        # 콘텐츠가 없으면 직접 API 호출 + 복호화 시도
-        if not content_text or len(content_text) < 100:
-            logger.info("Shadow DOM content empty, trying API intercept + decrypt...")
-            content_text = await _fetch_via_api_intercept(page, novel_id, chapter_id, context)
+        # nv 쿠키 추출
+        cookies = await context.cookies()
+        nv_cookie = ""
+        for c in cookies:
+            if c['name'] == 'nv':
+                nv_cookie = c['value']
+                break
+
+        if not nv_cookie:
+            logger.error("nv cookie not found")
+            await browser.close()
+            return None
+
+        payload = content_payload['data'].get('payload', '')
+        if not payload:
+            logger.error("Empty payload from novel-content")
+            await browser.close()
+            return None
+
+        # 복호화
+        try:
+            key = derive_key(nv_cookie, novel_id, chapter_id)
+            decrypted = decrypt_payload(payload, key)
+            content_text = extract_text_from_content(decrypted)
+        except Exception as e:
+            logger.error(f"Decryption failed: {e}")
+            await browser.close()
+            return None
 
         await browser.close()
 
@@ -254,142 +291,3 @@ async def fetch_chapter_content_full(
         return None
 
     return (title_text, content_text.strip())
-
-
-async def _fetch_via_api_intercept(
-    page,
-    novel_id: str,
-    chapter_id: str,
-    context,
-) -> str:
-    """API 인터셉트 + 직접 복호화.
-
-    브라우저에서 /api/nv-issue와 /api/novel-content를 직접 호출하고,
-    응답을 인터셉트하여 복호화합니다.
-    """
-    # 1. nv-issue에서 세션 토큰 가져오기
-    nv_session = await page.evaluate("""
-        async () => {
-            const res = await fetch('/api/nv-issue', {
-                method: 'POST',
-                credentials: 'same-origin',
-                cache: 'no-store',
-                headers: {'content-type': 'application/json'}
-            });
-            const data = await res.json();
-            return data.session || null;
-        }
-    """)
-
-    if not nv_session:
-        logger.error("Failed to get nv session token")
-        return ""
-
-    # 2. 쿠키에서 nv 값 확인
-    cookies = await context.cookies()
-    nv_cookie = ""
-    for c in cookies:
-        if c['name'] == 'nv':
-            nv_cookie = c['value']
-            break
-
-    session_token = nv_cookie or nv_session
-    logger.debug(f"Session token: {session_token[:30]}...")
-
-    # 3. RSC payload에서 token 추출
-    # toki31 RSC 형식: "token","eyJ..." (이스케이프된 따옴표와 쉼표 구분자)
-    rsc_token = await page.evaluate("""
-        () => {
-            const scripts = document.querySelectorAll('script');
-            for (const s of scripts) {
-                const text = s.textContent || '';
-                // 형식 1: "token","ey..." (쉼표 구분자)
-                let m = text.match(/"token","(ey[A-Za-z0-9_.-]+)"/);
-                if (m) return m[1];
-                // 형식 2: "token":"ey..." (콜론 구분자, 이스케이프 가능)
-                m = text.match(/\\?"token\\?":\\?"(ey[A-Za-z0-9_.-]+)\\?"/);
-                if (m) return m[1];
-                // 형식 3: NovelContent 근처 검색
-                const idx = text.indexOf('episodeRef');
-                if (idx > -1) {
-                    const chunk = text.substring(Math.max(0, idx - 500), idx + 1000);
-                    m = chunk.match(/"token","(ey[A-Za-z0-9_.-]+)"/) ||
-                        chunk.match(/\\?"token\\?":\\?"(ey[A-Za-z0-9_.-]+)\\?"/);
-                    if (m) return m[1];
-                }
-            }
-            return null;
-        }
-    """)
-
-    if not rsc_token:
-        logger.error("Failed to extract RSC token")
-        return ""
-
-    # 4. nonce 생성 + proof 계산
-    nonce_and_proof = await page.evaluate("""
-        async (nvSession) => {
-            const arr = new Uint8Array(24);
-            crypto.getRandomValues(arr);
-            const b64url = (buf) => {
-                let s = '';
-                for (let i = 0; i < buf.length; i++) s += String.fromCharCode(buf[i]);
-                return btoa(s).replace(/\\+/g, '-').replace(/\\//g, '_').replace(/=+$/g, '');
-            };
-            const nonce = b64url(arr);
-
-            const enc = new TextEncoder();
-            const key = await crypto.subtle.importKey('raw', enc.encode(nvSession),
-                {name: 'HMAC', hash: 'SHA-256'}, false, ['sign']);
-            const sig = await crypto.subtle.sign('HMAC', key, enc.encode(nonce));
-            const proof = b64url(new Uint8Array(sig));
-
-            return {nonce, proof};
-        }
-    """, session_token)
-
-    # 5. novel-content API 호출
-    result = await page.evaluate("""
-        async (params) => {
-            const {novelId, episodeId, token, nonce, proof, nvSession} = params;
-            const res = await fetch('/api/novel-content', {
-                method: 'POST',
-                credentials: 'same-origin',
-                cache: 'no-store',
-                headers: {
-                    'content-type': 'application/json',
-                    'x-novel-client': 'shadow-v3',
-                    'x-nv-session': nvSession,
-                },
-                body: JSON.stringify({
-                    novelId, episodeId, token, nonce, proof
-                })
-            });
-            return {status: res.status, data: await res.json()};
-        }
-    """, {
-        "novelId": novel_id,
-        "episodeId": chapter_id,
-        "token": rsc_token,
-        "nonce": nonce_and_proof['nonce'],
-        "proof": nonce_and_proof['proof'],
-        "nvSession": session_token,
-    })
-
-    if result['status'] != 200 or not result['data'].get('ok'):
-        logger.error(f"novel-content API failed: {result}")
-        return ""
-
-    payload = result['data'].get('payload', '')
-    if not payload:
-        logger.error("Empty payload from novel-content")
-        return ""
-
-    # 6. 복호화
-    try:
-        key = derive_key(session_token, novel_id, chapter_id)
-        decrypted = decrypt_payload(payload, key)
-        return extract_text_from_content(decrypted)
-    except Exception as e:
-        logger.error(f"Decryption failed: {e}")
-        return ""

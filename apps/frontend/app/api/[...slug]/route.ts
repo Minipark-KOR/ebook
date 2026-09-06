@@ -59,7 +59,7 @@ async function proxyToNeon(req: NextRequest, slug: string[]): Promise<NextRespon
     }
 
     if (slug[0] === 'novels' && slug.length === 2) {
-      // GET /api/novels/{id}
+      // GET /api/novels/{id} — 메타데이터만 반환 (챕터는 별도 호출)
       const novelId = decodeURIComponent(slug[1]);
       const novelRows = await neonQuery(
         `SELECT id, title, author, total_chapters, cover_url, description, genre, status, publisher, namu_url
@@ -69,23 +69,7 @@ async function proxyToNeon(req: NextRequest, slug: string[]): Promise<NextRespon
       if (novelRows.length === 0) {
         return NextResponse.json({ detail: 'Not found' }, { status: 404 });
       }
-      // 회차 목록도 함께
-      const chapters = await neonQuery(
-        `SELECT wr_id, chapter, title, content_length
-         FROM ebook_chapters WHERE novel_id = $1
-         ORDER BY wr_id LIMIT 1000`,
-        [novelId]
-      );
-      const novel = rowToNovel(novelRows[0]);
-      return NextResponse.json({
-        ...novel,
-        chapters: chapters.map((c: any) => ({
-          wr_id: Number(c.wr_id),
-          chapter: c.chapter,
-          title: c.title,
-          contentLength: c.content_length || 0,
-        })),
-      });
+      return NextResponse.json(rowToNovel(novelRows[0]));
     }
 
     if (slug[0] === 'chapters' && slug.length === 2) {

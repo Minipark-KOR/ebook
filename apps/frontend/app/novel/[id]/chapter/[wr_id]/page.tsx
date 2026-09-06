@@ -1,14 +1,15 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useCallback } from "react";
 import Link from "next/link";
-import { useParams } from "next/navigation";
+import { useParams, useRouter } from "next/navigation";
 import { fetchChapter, ChapterDetail } from "@/lib/api";
 
-const PAGE_SIZE = 100;
+const PAGE_SIZE = 20;
 
 export default function ChapterPage() {
   const params = useParams();
+  const router = useRouter();
   const wrId = Number(params.wr_id);
   const novelId = params.id as string;
 
@@ -18,6 +19,8 @@ export default function ChapterPage() {
   const [listPage, setListPage] = useState<number | null>(null);
   const [fontSize, setFontSize] = useState(18);
   const [navOpen, setNavOpen] = useState(false);
+  const [touchStartY, setTouchStartY] = useState(0);
+  const [touchStartX, setTouchStartX] = useState(0);
 
   useEffect(() => {
     if (!wrId) return;
@@ -41,6 +44,18 @@ export default function ChapterPage() {
     return () => window.removeEventListener("keydown", onKey);
   }, [navOpen]);
 
+  const goPrev = useCallback(() => {
+    if (chapter?.prevChapter) {
+      router.push(`/novel/${novelId}/chapter/${chapter.prevChapter}`);
+    }
+  }, [chapter, novelId, router]);
+
+  const goNext = useCallback(() => {
+    if (chapter?.nextChapter) {
+      router.push(`/novel/${novelId}/chapter/${chapter.nextChapter}`);
+    }
+  }, [chapter, novelId, router]);
+
   function buildListHref(focusChapter: number): string {
     const params = new URLSearchParams();
     if (listPage && listPage > 1) params.set("page", String(listPage));
@@ -48,6 +63,25 @@ export default function ChapterPage() {
     const qs = params.toString();
     return `/novel/${novelId}${qs ? `?${qs}` : ""}`;
   }
+
+  // 화면 터치/클릭: 위쪽 40% = 이전화, 아래쪽 40% = 다음화, 가운데 20% = 회차목록
+  const handleTap = useCallback(
+    (e: React.MouseEvent<HTMLDivElement>) => {
+      const rect = e.currentTarget.getBoundingClientRect();
+      const y = e.clientY - rect.top;
+      const h = rect.height;
+      const ratio = y / h;
+
+      if (ratio < 0.4) {
+        if (chapter?.prevChapter) goPrev();
+      } else if (ratio > 0.6) {
+        if (chapter?.nextChapter) goNext();
+      } else {
+        setNavOpen((v) => !v);
+      }
+    },
+    [chapter, goPrev, goNext]
+  );
 
   if (loading) {
     return (
@@ -71,10 +105,7 @@ export default function ChapterPage() {
 
   return (
     <div className="min-h-screen bg-gray-50 dark:bg-gray-900">
-      <div
-        className="max-w-3xl mx-auto px-4 py-8"
-        onClick={() => setNavOpen((v) => !v)}
-      >
+      <div className="max-w-3xl mx-auto px-4 py-8">
         <div onClick={(e) => e.stopPropagation()}>
           <Link
             href={buildListHref(chapter.chapter)}
@@ -156,6 +187,30 @@ export default function ChapterPage() {
           </div>
         </div>
       </div>
+
+      {/* 터치 네비게이션 레이어 — 화면 전체를 3분할 (pointer-events-none으로 본문 클릭 통과) */}
+      <nav
+        className="fixed inset-0 z-0 flex flex-col pointer-events-none"
+        onClick={handleTap}
+      >
+        {/* 위쪽 40%: 이전화 */}
+        <div
+          className="h-[40%] pointer-events-auto cursor-pointer"
+          title="이전 화"
+        />
+
+        {/* 가운데 20%: 회차목록 (한 번 더 누르면 overlay) */}
+        <div
+          className="h-[20%] pointer-events-auto cursor-pointer"
+          title="회차 목록"
+        />
+
+        {/* 아래쪽 40%: 다음화 */}
+        <div
+          className="h-[40%] pointer-events-auto cursor-pointer"
+          title="다음 화"
+        />
+      </nav>
 
       {navOpen && (
         <div

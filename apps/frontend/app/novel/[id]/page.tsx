@@ -5,7 +5,7 @@ import Link from "next/link";
 import { useParams, useSearchParams, useRouter } from "next/navigation";
 import { fetchNovel, fetchChapters, Novel, Chapter } from "@/lib/api";
 
-const PAGE_SIZE = 100;
+const PAGE_SIZE = 20;
 
 export default function NovelPage() {
   const params = useParams();

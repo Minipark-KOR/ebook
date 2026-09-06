@@ -203,11 +203,12 @@ class LightweightCollector:
         rsc_text = r.text
 
         # 2. RSC payload에서 token 추출 (JWT: ey...)
-        # 패턴 다양화: "token","ey..." / "token":"ey..." / escape된 형태
+        # RSC payload는 escape된 따옴표 사용: \"token\":\"eyJ...\"
         token = None
         for pattern in [
+            r'\\?"token\\?":\\?"(ey[A-Za-z0-9_.-]+)\\?"',
+            r'"token"\s*:\s*"(ey[A-Za-z0-9_.-]+)"',
             r'"token","(ey[A-Za-z0-9_.-]+)"',
-            r'"token"\s*:\s*"([A-Za-z0-9_.-]+\.[A-Za-z0-9_.-]+\.[A-Za-z0-9_.-]+)"',
         ]:
             m = re.search(pattern, rsc_text)
             if m:

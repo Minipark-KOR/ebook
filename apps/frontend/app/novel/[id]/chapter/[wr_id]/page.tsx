@@ -63,27 +63,30 @@ export default function ChapterPage() {
     return `/novel/${novelId}${qs ? `?${qs}` : ""}`;
   }
 
-  // 화면 터치: 위 15% = 페이지 업, 아래 15% = 페이지 다운, 가운데 = overlay 토글
-  const handleTap = useCallback(
-    (e: React.MouseEvent<HTMLDivElement>) => {
-      const rect = e.currentTarget.getBoundingClientRect();
-      const y = e.clientY - rect.top;
-      const h = rect.height;
+  // 창 레벨 클릭: 링크/버튼은 통과, 빈 영역만 페이지 업/다운/overlay
+  useEffect(() => {
+    const handler = (e: MouseEvent) => {
+      // 링크, 버튼, input 클릭 시 무시
+      const target = e.target as HTMLElement;
+      if (target.closest("a, button, input, [role='button']")) return;
+      // overlay가 열려 있으면 무시 (overlay 내 클릭은 overlay가 처리)
+      if (navOpen) return;
+
+      const y = e.clientY;
+      const h = window.innerHeight;
       const ratio = y / h;
 
       if (ratio < 0.15) {
-        // 위쪽 15%: 페이지 업 (이전 내용만, overlay 없음)
         window.scrollBy({ top: -window.innerHeight * 0.8, behavior: "smooth" });
       } else if (ratio > 0.85) {
-        // 아래쪽 15%: 페이지 다운 (다음 내용만, overlay 없음)
         window.scrollBy({ top: window.innerHeight * 0.8, behavior: "smooth" });
       } else {
-        // 가운데: overlay 토글
-        setNavOpen((v) => !v);
+        setNavOpen(true);
       }
-    },
-    []
-  );
+    };
+    window.addEventListener("click", handler);
+    return () => window.removeEventListener("click", handler);
+  }, [navOpen]);
 
   if (loading) {
     return (
@@ -190,26 +193,7 @@ export default function ChapterPage() {
         </div>
       </div>
 
-      {/* 터치 네비게이션 레이어 — 화면 상하 15%만 (pointer-events-none으로 본문 클릭 통과) */}
-      <nav
-        className="fixed inset-0 z-0 flex flex-col pointer-events-none"
-        onClick={handleTap}
-      >
-        {/* 위쪽 15%: 위로 스크롤 */}
-        <div
-          className="h-[15%] pointer-events-auto cursor-pointer"
-          title="위로 스크롤"
-        />
-
-        {/* 가운데 70%: 회차목록 overlay */}
-        <div className="flex-1 pointer-events-auto cursor-pointer" />
-
-        {/* 아래쪽 15%: 아래로 스크롤 */}
-        <div
-          className="h-[15%] pointer-events-auto cursor-pointer"
-          title="아래로 스크롤"
-        />
-      </nav>
+      {/* 터치 네비게이션은 window-level click 이벤트로 처리 (위 15% 페이지 업, 아래 15% 페이지 다운, 가운데 overlay) */}
 
       {navOpen && (
         <div

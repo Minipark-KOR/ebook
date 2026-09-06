@@ -73,13 +73,9 @@ export default function ChapterPage() {
 
       // ref로 navOpen 실시간 확인 (useState closure 이슈 방지)
       if (navOpenRef.current) {
-        const y = e.clientY;
-        const h = window.innerHeight;
-        const ratio = y / h;
-        if (ratio >= 0.15 && ratio <= 0.85) {
-          setNavOpen(false);
-          navOpenRef.current = false;
-        }
+        // overlay 열려 있으면 아무 곳이나 누르면 닫기
+        setNavOpen(false);
+        navOpenRef.current = false;
         return;
       }
 
@@ -220,7 +216,7 @@ export default function ChapterPage() {
             onClick={(e) => {
               e.stopPropagation();
               if (chapter.prevChapter) {
-                window.location.href = `/novel/${novelId}/chapter/${chapter.prevChapter}`;
+                router.push(`/novel/${novelId}/chapter/${chapter.prevChapter}`);
               } else {
                 setNavOpen(false);
                 navOpenRef.current = false;

@@ -249,76 +249,29 @@ def _check_bookto31_alive() -> bool:
 
 
 def save_chapter(wr_id: int, novel_title: str, body: str) -> bool:
-    """챕터 본문을 DB에 저장."""
-    import json as _json
+    """챕터 본문을 lib.storage로 저장 + Neon DB/Vercel 갱신."""
+    from lib.storage import save_chapter as _save, get_novel_dir, update_meta_from_namu
 
-    # wr_id → 회차 번호 (대부분 21430 기준이지만 새 소설은 다름)
-    chapter_num = None
-    first_line = body.split('\n')[0] if body else ''
-    import re
-    m = re.match(r'^(\d+)(?:화|편|장)', first_line)
-    if m:
-        chapter_num = int(m.group(1))
-
-    if chapter_num is None:
-        chapter_num = wr_id
-
-    # 소설 디렉토리 찾기/생성
-    novel_id = novel_title.replace(' ', '_').replace('/', '_') if novel_title else f"novel_{wr_id}"
-    novel_dir = Path('/opt/ai_data/flaresolverr/novels') / novel_id
-    novel_dir.mkdir(parents=True, exist_ok=True)
-
-    # 기존 파일이 있으면 업데이트, 없으면 신규
-    chapter_file = novel_dir / f"{wr_id}.json"
-    if chapter_file.exists():
-        with open(chapter_file, 'r', encoding='utf-8') as f:
-            data = _json.load(f)
-    else:
-        data = {}
-
-    data.update({
-        "wr_id": wr_id,
-        "chapter": chapter_num,
-        "title": f"{novel_title} - {chapter_num}화" if chapter_num else novel_title,
-        "content_length": len(body),
-        "content": body,
-        "url": f"https://bookto31.com/bbs/board.php?bo_table=novel&wr_id={wr_id}",
-        "collected_at": datetime.now(timezone.utc).isoformat(),
-        "user_agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36"
-    })
-
-    # 챕터 파일 저장
-    try:
-        with open(chapter_file, 'w', encoding='utf-8') as f:
-            _json.dump(data, f, ensure_ascii=False, indent=2)
-    except (OSError, IOError) as e:
-        log.error(f"  ✗ 챕터 파일 저장 실패: {e}")
+    # lib.storage로 JSON 저장 + meta.json 갱신
+    if not _save(novel_title, wr_id, body, source="bookto31"):
+        log.error(f"  ✗ 챕터 저장 실패: wr_id={wr_id}")
         return False
 
-    # meta.json 생성/업데이트 (소설 첫 챕터인 경우)
-    new_novel = False
-    meta_file = novel_dir / 'meta.json'
-    try:
-        if not meta_file.exists():
-            new_novel = True
-            # 새 소설 - namu.wiki로 메타데이터 자동 보강
-            meta = enrich_metadata_from_namu(novel_id, novel_title)
-            with open(meta_file, 'w', encoding='utf-8') as f:
-                _json.dump(meta, f, ensure_ascii=False, indent=2)
-        else:
-            # 기존 meta 업데이트 - totalChapters 카운트
-            with open(meta_file, 'r', encoding='utf-8') as f:
-                meta = _json.load(f)
-            chapter_files = list(novel_dir.glob('*.json'))
-            chapter_count = sum(1 for f in chapter_files if f.stem.isdigit())
-            if meta.get('totalChapters', 0) < chapter_count:
-                meta['totalChapters'] = chapter_count
-                with open(meta_file, 'w', encoding='utf-8') as f:
-                    _json.dump(meta, f, ensure_ascii=False, indent=2)
-    except Exception as e:
-        log.warning(f"meta.json 생성/업데이트 실패: {e}")
+    novel_id = novel_title.replace(' ', '_').replace('/', '_') if novel_title else f"novel_{wr_id}"
+    novel_dir = get_novel_dir(novel_title)
 
-    log.info(f"  저장 완료: {chapter_file} ({len(body)} chars)")
+    # 새 소설이면 namu.wiki 메타데이터 보강
+    meta_file = novel_dir / 'meta.json'
+    if meta_file.exists():
+        import json as _json
+        with open(meta_file, 'r', encoding='utf-8') as f:
+            meta = _json.load(f)
+        if meta.get('author') == '미상':
+            namu_meta = enrich_metadata_from_namu(novel_id, novel_title)
+            if namu_meta:
+                update_meta_from_namu(novel_title, namu_meta)
+
+    log.info(f"  저장 완료: wr_id={wr_id} ({len(body)} chars)")
 
     # Neon DB 동기화 (Vercel SSR용)
     try:
@@ -407,21 +360,11 @@ def enrich_metadata_from_namu(novel_id: str, novel_title: str) -> dict:
         log.info(f"  namu.wiki 메타데이터 조회 시도: {novel_title}")
         namu_meta = metadata_namu.get_metadata(novel_title, download_cover_to=cover_path)
         if namu_meta:
-            if namu_meta.get('author'):
-                meta['author'] = namu_meta['author']
-            if namu_meta.get('cover_url'):
-                meta['coverUrl'] = namu_meta['cover_url']
-            if namu_meta.get('description'):
-                meta['description'] = namu_meta['description']
-            if namu_meta.get('genre'):
-                meta['genre'] = namu_meta['genre']
-            if namu_meta.get('status') and namu_meta['status'] != 'unknown':
-                meta['status'] = namu_meta['status']
-            if namu_meta.get('publisher'):
-                meta['publisher'] = namu_meta['publisher']
-            if namu_meta.get('url'):
-                meta['namuUrl'] = namu_meta['url']
-            log.info(f"  ✓ namu.wiki 메타데이터 적용: 작가={meta['author']}, 표지={meta['coverUrl']}")
+            # lib.storage로 meta.json 업데이트
+            from lib.storage import update_meta_from_namu
+            update_meta_from_namu(novel_title, namu_meta)
+            meta.update(namu_meta)
+            log.info(f"  ✓ namu.wiki 메타데이터 적용: 작가={meta.get('author', '?')}, 표지={meta.get('coverUrl', '?')}")
     except Exception as e:
         log.warning(f"  namu.wiki 메타데이터 조회 실패 (기본값 사용): {e}")
 

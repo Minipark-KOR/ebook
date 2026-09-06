@@ -171,7 +171,34 @@ class ChapterCollector:
             locale="ko-KR",
         )
         self._page = await self._context.new_page()
+
+        # novel-content API 응답 리스너 (브라우저 수명 동안 1회만 등록)
+        self._content_payload = {}
+        self._response_event = asyncio.Event()
+
+        async def _on_novel_content(response):
+            if "/api/novel-content" in response.url:
+                try:
+                    data = await response.json()
+                    if data.get("ok") and data.get("payload"):
+                        self._content_payload["data"] = data
+                        self._response_event.set()
+                except Exception:
+                    pass
+
+        self._page.on("response", _on_novel_content)
+
+        # 불필요한 리소스 차단 (이미지/폰트/미디어 → 로딩 시간 단축)
+        await self._page.route("**/*", self._block_unnecessary)
         logger.info(f"브라우저 시작 완료 ({self.config.name})")
+
+    async def _block_unnecessary(self, route, request):
+        """불필요한 리소스 차단 — 이미지/폰트/미디어만 차단, CSS/JS는 허용."""
+        resource_type = request.resource_type
+        if resource_type in ("image", "font", "media"):
+            await route.abort()
+        else:
+            await route.continue_()
 
     async def close(self):
         """브라우저 종료."""
@@ -216,32 +243,10 @@ class ChapterCollector:
 
         page = self._page
         target_url = f"{self.config.base_url}/novel/{novel_id}/{chapter_id}"
-        content_payload = {}
 
-        async def on_response(response):
-            if "/api/novel-content" in response.url:
-                try:
-                    data = await response.json()
-                    if data.get("ok") and data.get("payload"):
-                        content_payload["data"] = data
-                except Exception:
-                    pass
-
-        # novel-content API 응답 대기 (asyncio.Event 기반, 최대 15s)
-        # 응답 JSON 파싱까지 완료된 시점을 감지하여 지연 최소화
-        response_event = asyncio.Event()
-
-        async def _waiting_on_response(response):
-            if "/api/novel-content" in response.url and not content_payload.get("data"):
-                try:
-                    data = await response.json()
-                    if data.get("ok") and data.get("payload"):
-                        content_payload["data"] = data
-                        response_event.set()
-                except Exception:
-                    pass
-
-        page.on("response", _waiting_on_response)
+        # 이벤트 초기화 (이전 회차 응답 무시)
+        self._response_event.clear()
+        self._content_payload.clear()
 
         # 페이지 로드
         loaded = await self.navigate(target_url)
@@ -249,14 +254,14 @@ class ChapterCollector:
             logger.error(f"  페이지 로드 실패: {target_url}")
             return None
 
-        # novel-content API 응답 대기 (이미 수신되었으면 즉시 진행)
-        if not content_payload.get("data"):
+        # novel-content API 응답 대기 (이미 수신되었으면 즉시 진행, 최대 15s)
+        if not self._content_payload.get("data"):
             try:
-                await asyncio.wait_for(response_event.wait(), timeout=15)
+                await asyncio.wait_for(self._response_event.wait(), timeout=15)
             except asyncio.TimeoutError:
                 pass
 
-        if not content_payload.get("data"):
+        if not self._content_payload.get("data"):
             logger.error(f"  novel-content API 응답 없음: {target_url}")
             return None
 
@@ -272,7 +277,7 @@ class ChapterCollector:
             logger.error("  nv cookie not found")
             return None
 
-        payload = content_payload["data"].get("payload", "")
+        payload = self._content_payload["data"].get("payload", "")
         if not payload:
             logger.error("  Empty payload from novel-content")
             return None

@@ -69,8 +69,15 @@ export default function ChapterPage() {
       // 링크, 버튼, input 클릭 시 무시
       const target = e.target as HTMLElement;
       if (target.closest("a, button, input, [role='button']")) return;
-      // overlay가 열려 있으면 무시 (overlay 내 클릭은 overlay가 처리)
-      if (navOpen) return;
+
+      // overlay 열려 있을 때: 가운데 클릭 시 닫기
+      if (navOpen) {
+        const y = e.clientY;
+        const h = window.innerHeight;
+        const ratio = y / h;
+        if (ratio >= 0.15 && ratio <= 0.85) setNavOpen(false);
+        return;
+      }
 
       const y = e.clientY;
       const h = window.innerHeight;
@@ -81,10 +88,8 @@ export default function ChapterPage() {
       const overlap = 4 * lineH;
 
       if (ratio < 0.15) {
-        // 페이지 업: 4줄만큼 더 올라가서 겹침 없이 깔끔하게
         window.scrollBy({ top: -(window.innerHeight + overlap), behavior: "smooth" });
       } else if (ratio > 0.85) {
-        // 페이지 다운: 4줄만큼 더 내려가서 겹침 없이
         window.scrollBy({ top: window.innerHeight + overlap, behavior: "smooth" });
       } else {
         setNavOpen(true);

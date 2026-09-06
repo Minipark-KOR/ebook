@@ -193,9 +193,9 @@ class ChapterCollector:
         logger.info(f"브라우저 시작 완료 ({self.config.name})")
 
     async def _block_unnecessary(self, route, request):
-        """불필요한 리소스 차단 — 이미지/폰트/미디어만 차단, CSS/JS는 허용."""
+        """불필요한 리소스 차단 — 이미지/폰트/미디어/CSS 차단, JS만 허용."""
         resource_type = request.resource_type
-        if resource_type in ("image", "font", "media"):
+        if resource_type in ("image", "font", "media", "stylesheet"):
             await route.abort()
         else:
             await route.continue_()

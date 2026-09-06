@@ -8,15 +8,13 @@
 ### 문제점
 
 1. **bookto31.py와 toki31.py가 중복 코드 공유** — HTTP 헤더, 세션 관리, rate limiter 호출 등
+   - bookto31.py는 `_create_session()` 안에 헤더가 inline 하드코딩 (별도 `_build_headers()` 없음)
+   - toki31.py는 `_build_headers()` 별도 함수 보유 — 두 곳의 헤더가 중복
 2. **metadata_namu.py가 bookto31의 private 함수를 import** (`from services.bookto31 import _fetch_with_flaresolverr`) — 캡슐화 위반
-3. **toki31.py가 구식 구현** — curl_cffi 미사용, 무료 KR proxy만 의존 (현재 toki31은 CloudFront geo-block으로 접속 불가)
-4. **ebook_worker.py에 저장 로직이 내장** — collect_novel.py에도 유사 로직 중복
-
-### 목표
-
-- bookto31과 toki31을 **독립적 크롤러 모듈**로 유지하면서 공통 인프라만 분리
-- 웹페이지 로직(routers/, frontend/)은 **변경 없음**
-- 새로운 수집 소스(joara, munpia 등) 추가 시 공통 레이어 재사용 가능
+3. **toki31.py가 구식 구현** — requests + 무료 KR proxy만 의존.
+   - **2026-09-06 PoC 결과**: curl_cffi chrome131 TLS fingerprint 위장으로 Oracle datacenter IP에서도 접속 성공 (HTTP 200, `/novel` RSC payload 28개/에피소드 참조 84개) → curl_cffi 도입 근거 확보
+4. **ebook_worker.py에 저장 로직이 내장** — JSON 저장 + meta.json 갱신 + Neon DB 동기화가 한 함수(`save_chapter`)에 집중
+   - 기존 계획서에서 `collect_novel.py`에 "유사 로직 중복"이라 적었으나 **collect_novel.py는 실제로 존재하지 않음** → 저장 로직 중복은 ebook_worker.py 내부 응집 문제로 정정
 
 ---
 
@@ -29,7 +27,7 @@ apps/backend/
 │
 ├── services/
 │   ├── bookto31.py              # FlareSolverr + GNUBOARD5 파싱 (모든 로직 inline)
-│   │   ├── _build_headers()     # ← Chrome 헤더 (toki31과 중복)
+│   │   ├── _create_session()    # ← Chrome 헤더 inline (toki31 _build_headers와 중복)
 │   │   ├── _session_*           # FlareSolverr 세션 관리
 │   │   ├── _rate_limit_*()      # rate limiter 호출 (inline 구현 + lib import)
 │   │   ├── _flaresolverr_*()    # FlareSolverr HTTP 클라이언트
@@ -57,10 +55,13 @@ scripts/
 │   └── watchdog.py              # 1분 주기 트리거
 │
 ├── bookto31_healthcheck.py      # 북토끼 상태 체크
-├── collect_novel.py             # 독립 수집 스크립트 (FlareSolverr 직접 호출)
-├── discover_chapters.py         # 회차 목록 발견
+├── discover_chapters.py         # 회차 목록 발견 (FlareSolverr 직접 호출)
 ├── dual_metadata_ssot.py        # 듀얼 메타데이터
-└── brave_book_url_search.py     # Brave 검색
+├── brave_book_url_search.py     # Brave 검색
+└── json_to_epub.py              # JSON → EPUB 변환
+
+# 참고: collect_novel.py는 존재하지 않음 (계획서 초안의 오기)
+#   독립 수집은 ebook_worker.py(큐 기반) + discover_chapters.py(회차 발견)로 분담
 
 프로젝트 외부:
 ├── systemd: ebook-watcher.service     # watchdog.py 15분 실행
@@ -78,7 +79,7 @@ bookto31.py ──→ FlareSolverr ──→ bookto31.com (Cloudflare Turnstile)
                                    JSON 파일
                               (/opt/ai_data/flaresolverr/novels/)
                                         ↓
-toki31.py ────→ curl_cffi ────→ toki31.com (CloudFront KR_ONLY)  ← 현재 접속 불가
+toki31.py ────→ curl_cffi ────→ toki31.com (CloudFront KR_ONLY)  ← curl_cffi PoC 성공(2026-09-06)
                                         ↓
                                    JSON 파일 (동일 경로)
                                         ↓
@@ -127,12 +128,13 @@ apps/backend/
 │   ├── toki31.py                # REFACTOR: curl_cffi + Next.js RSC 파싱
 │   │   ├── from lib.user_agent import chrome_headers
 │   │   ├── from lib.curl_session import create_curl_session
-│   │   ├── from lib.storage import save_chapter     (선택)
+│   │   ├── from lib.storage import save_chapter     (권장)
 │   │   ├── fetch_*()            # public fetch 함수
 │   │   └── parse_*()            # Next.js RSC payload 파서
 │   │
 │   ├── metadata_namu.py         # REFACTOR: lib.flaresolverr_client 사용
 │   │   ├── from lib.flaresolverr_client import FlareSolverrSession
+│   │   ├── ⚠️ FlareSolverrSession(rate_limit=False) — namu.wiki는 자체 30분 제한 사용
 │   │   └── bookto31 import 제거 ✅
 │   │
 │   ├── data.py                  # ✅ 변경 없음
@@ -146,11 +148,13 @@ scripts/
 │   ├── ebook_queue.py           # ✅ 변경 없음
 │   └── watchdog.py              # ✅ 변경 없음
 │
-├── collect_novel.py             # REFACTOR: lib.flaresolverr_client 사용
 ├── bookto31_healthcheck.py      # ✅ 변경 없음
-├── discover_chapters.py         # ✅ 변경 없음
+├── discover_chapters.py         # ✅ 변경 없음 (lib.flaresolverr_client 사용 가능)
 ├── dual_metadata_ssot.py        # ✅ 변경 없음
-└── brave_book_url_search.py     # ✅ 변경 없음
+├── brave_book_url_search.py     # ✅ 변경 없음
+└── json_to_epub.py              # ✅ 변경 없음
+
+# 참고: collect_novel.py는 존재하지 않음. 독립 수집이 필요하면 Phase 1에서 신규 생성
 
 프로젝트 외부:
 ├── systemd: ebook-watcher.service     # ✅ 변경 없음
@@ -170,18 +174,17 @@ lib/user_agent.py ────────────────────�
 lib/flaresolverr_client.py ─────────────────── bookto31.py
      │                                              │
      └──────────────────────────────────── metadata_namu.py
-     │                                              │
-     └───────────────────────────────────── collect_novel.py
+     │                    (rate_limit=False)
      │                                              │
      └──────────────────────────────────── MCP (flaresolverr_bypass)
+     │
+     └──────────────────────────────────── discover_chapters.py (선택)
 
 lib/curl_session.py ───────────────────────── toki31.py
 
 lib/storage.py ────────────────────────────── ebook_worker.py
      │
-     └─────────────────────────────────────── collect_novel.py
-     │
-     └─────────────────────────────────────── toki31.py (선택)
+     └─────────────────────────────────────── toki31.py (권장)
 ```
 
 ---
@@ -220,7 +223,7 @@ def chrome_headers(version: str = "131") -> dict:
     }
 ```
 
-**영향 파일**: bookto31.py, toki31.py, collect_novel.py, healthcheck.py, ebook_worker.py
+**영향 파일**: bookto31.py, toki31.py, healthcheck.py, ebook_worker.py
 
 ### 4.2 `lib/flaresolverr_client.py`
 
@@ -258,7 +261,19 @@ class FlareSolverrSession:
     def get_cookies(self) -> Dict[str, str]: ...
 ```
 
-**영향 파일**: bookto31.py (대체), metadata_namu.py (대체), collect_novel.py (대체), MCP (참조)
+> ⚠️ **metadata_namu.py 주의**: `FlareSolverrSession(rate_limit=False)`로 생성할 것.
+> namu.wiki는 **자체 30분 rate limiter**(`_namu_rate_limit()`, 별도 DB `/opt/ai_data/flaresolverr/namu_rate_limiter.db`)를 먼저 호출한 뒤 FlareSolverr를 사용한다.
+> `rate_limit=True`(기본값)로 생성하면 bookto31의 8분 제한이 namu.wiki 요청에 적용되어 간격이 비정상적으로 짧아진다.
+> 
+> 예상 코드:
+> ```python
+> _fs = FlareSolverrSession(rate_limit=False)  # namu.wiki 전용
+> _namu_rate_limit()                           # 30분 자체 제한
+> html = _fs.fetch(url)
+> _namu_record()                               # 자체 기록
+> ```
+
+**영향 파일**: bookto31.py (대체), metadata_namu.py (대체, rate_limit=False), MCP (참조)
 
 ### 4.3 `lib/curl_session.py`
 
@@ -318,7 +333,7 @@ def get_novel_dir(novel_title: str) -> Path:
     # ...
 ```
 
-**영향 파일**: ebook_worker.py (중복 제거), collect_novel.py (중복 제거), toki31.py (향후)
+**영향 파일**: ebook_worker.py (중복 제거), toki31.py (권장)
 
 ---
 
@@ -328,11 +343,12 @@ def get_novel_dir(novel_title: str) -> Path:
 
 | 파일 | 변경 내용 | 위험도 |
 |------|----------|--------|
-| `services/bookto31.py` | `_build_headers()` → `lib.user_agent`, `_session_*`/`_flaresolverr_*` → `lib.flaresolverr_client` | **중** |
+| `services/bookto31.py` | `_create_session()` inline 헤더 → `lib.user_agent`,  `_session_*`/`_flaresolverr_*` → `lib.flaresolverr_client` | **중** |
 | `services/toki31.py` | curl_cffi 도입 + `lib.user_agent` + `lib.curl_session` 사용. proxy 로직 제거 | **중** |
-| `services/metadata_namu.py` | `from services.bookto31 import _fetch_with_flaresolverr` → `from lib.flaresolverr_client import FlareSolverrSession` | **하** |
+| `services/metadata_namu.py` | `from services.bookto31 import _fetch_with_flaresolverr` → `from lib.flaresolverr_client import FlareSolverrSession` ⚠️ rate_limit=False | **하** |
 | `scripts/ebook_worker.py` | 저장 로직 → `lib.storage` 호출로 변경 | **하** |
-| `scripts/collect_novel.py` | FlareSolverr 직접 호출 → `lib.flaresolverr_client` 사용 | **하** |
+
+# 참고: collect_novel.py는 실제로 존재하지 않음. 계획서 초안에서 제거함.
 
 ### 5.2 변경 불필요한 파일 (웹페이지 로직)
 
@@ -382,6 +398,12 @@ def is_novel_index_page(html) -> bool: ...
 
 ### 5.4 toki31.py 리팩터 후 남는 코드
 
+> **2026-09-06 PoC 검증 완료** ✅
+> curl_cffi chrome131로 Oracle datacenter IP에서 toki31.com 접속 성공:
+> - `/` (루트): HTTP 200, 277KB
+> - `/novel`: HTTP 200, 215KB — RSC payload 28개 스크립트, 에피소드 참조 84개 발견
+> - 무료 KR proxy 불필요 확인 (TLS fingerprint 위장만으로 CloudFront geo-block 우회)
+
 ```python
 """toki31.com 크롤러 — 순수 Next.js RSC 파싱만"""
 
@@ -430,17 +452,20 @@ def extract_episode_data(html) -> List[Dict]:
 
 | 단계 | 작업 | 위험도 |
 |------|------|--------|
-| 1 | bookto31.py: `_build_headers()` → `lib.user_agent.chrome_headers()` | 하 |
+| 1 | bookto31.py: `_create_session()` inline 헤더 → `lib.user_agent.chrome_headers()` | 하 |
 | 2 | bookto31.py: `_session_*`/`_flaresolverr_*` → `lib.flaresolverr_client.FlareSolverrSession` | 중 |
 | 3 | 테스트: `python3 -c "from services.bookto31 import fetch_home; print(fetch_home()[:200])"` | — |
-| 4 | ebook-watcher.watchdog 실행해서 정상 수집 확인 | — |
+| 4 | 🔒 **시작 전 `git tag` 생성** (예: `phase2-before`), 실패 시 `git checkout phase2-before`로 복구 | — |
+| 5 | ebook-watcher.watchdog 실행해서 정상 수집 확인 | — |
 
 ### Phase 3: metadata_namu.py 리팩터
 
 | 단계 | 작업 | 위험도 |
 |------|------|--------|
 | 1 | `from services.bookto31 import _fetch_with_flaresolverr` → `from lib.flaresolverr_client import FlareSolverrSession` | 하 |
-| 2 | 테스트: namu.wiki 메타데이터 조회 정상 동작 확인 | — |
+| 2 | ⚠️ `FlareSolverrSession(rate_limit=False)`로 생성 — namu.wiki 자체 30분 제한 유지 | 하 |
+| 3 | 🔒 **시작 전 `git tag` 생성** (예: `phase3-before`), 실패 시 복구 | — |
+| 4 | 테스트: namu.wiki 메타데이터 조회 정상 동작 확인 | — |
 
 ### Phase 4: toki31.py 재작성
 
@@ -448,15 +473,21 @@ def extract_episode_data(html) -> List[Dict]:
 |------|------|--------|
 | 1 | toki31.py: curl_cffi 도입 (`lib.curl_session`) | 중 |
 | 2 | toki31.py: 무료 KR proxy 로직 제거 | 중 |
-| 3 | toki31.py: Next.js RSC 파서 추가 | 중 |
-| 4 | 테스트: curl_cffi로 toki31.com 접속 확인 | — |
+| 3 | toki31.py: Next.js RSC 파서 추가 (`parse_rsc_payload`, `extract_episode_data`) | 중 |
+| 4 | 테스트: curl_cffi로 toki31.com 접속 확인 (PoC로 이미 검증됨: `/`, `/novel` 모두 200) | — |
+| 5 | 🔒 **시작 전 `git tag` 생성** (예: `phase4-before`), 실패 시 복구 | — |
 
-### Phase 5: 저장 로직 통합 (선택)
+### Phase 5: 저장 로직 통합 (권장)
+
+> **위상 변경**: 기존 "선택" → "**권장**".
+> `ebook_worker.py:save_chapter()`는 JSON 저장 + meta.json 갱신 + Neon DB 동기화가 한 함수(80줄)에 집중된 구조라 분리가 필요.
+> 완전 분리가 어려우면 "다음 이슈로 이관"으로 명시하고, 이번 범위에서 제외를 분명히 할 것.
 
 | 단계 | 작업 | 위험도 |
 |------|------|--------|
 | 1 | ebook_worker.py: `save_chapter()` → `lib.storage.save_chapter()` | 하 |
-| 2 | collect_novel.py: `lib.storage` + `lib.flaresolverr_client` 사용 | 하 |
+| 2 | 🔒 **시작 전 `git tag` 생성** (예: `phase5-before`), 실패 시 복구 | — |
+| 3 | (선택) 독립 수집 CLI가 필요하면 `scripts/collect_novel.py` 신규 생성 — 현재 미존재 | — |
 
 ---
 
@@ -483,18 +514,39 @@ meta = get_metadata('하남자의 탑 공략법')
 assert meta and meta.get('author'), '메타데이터 조회 실패'
 print(f'OK: 작가={meta[\"author\"]}')
 "
+
+# rate_limit=False 동작 확인 (namu.wiki 30분 제한 우회 없이 FlareSolverr만 사용)
+python3 -c "
+from lib.flaresolverr_client import FlareSolverrSession
+import services.metadata_namu as nm
+# namu.wiki 자체 rate limiter가 정상 동작하는지 확인
+assert hasattr(nm, '_namu_rate_limit'), '자체 rate limiter 보존 확인'
+print('OK: namu.wiki 자체 rate limiter 유지')
+"
 ```
 
 ### Phase 4 완료 조건
 ```bash
-# toki31 curl_cffi 접속 확인
+# toki31 curl_cffi 접속 확인 (PoC 기반 개선: RSC payload 파싱까지 검증)
 python3 -c "
 from curl_cffi import requests as creq
 s = creq.Session(impersonate='chrome131')
 s.headers.update({'Accept-Language': 'ko-KR,ko;q=0.9'})
-r = s.get('https://toki31.com/ing', timeout=15)
+r = s.get('https://toki31.com/novel', timeout=15)
 assert r.status_code == 200, f'접속 실패: {r.status_code}'
-print(f'OK: toki31.com/ing {len(r.text)} chars')
+
+# RSC payload 파싱 결과 검증 — 에피소드 데이터가 실제로 추출되는지 확인
+import re
+rsc_scripts = re.findall(r'<script[^>]*>self\.__next_f\.push', r.text)
+assert len(rsc_scripts) > 0, f'RSC payload 없음: {len(rsc_scripts)}개'
+print(f'OK: toki31.com/novel {len(r.text)} chars, RSC {len(rsc_scripts)}개')
+
+# lib.curl_session 사용 검증
+from lib.curl_session import create_curl_session
+s2 = create_curl_session(impersonate='chrome131')
+r2 = s2.get('https://toki31.com/', timeout=15)
+assert r2.status_code == 200
+print(f'OK: lib.curl_session 통한 접속 성공')
 "
 ```
 

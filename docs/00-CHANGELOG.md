@@ -2,7 +2,89 @@
 
 > ebooklib의 모든 주요 변경 사항. 최신이 위.
 
-## 2026-09-05 (가장 최근)
+## 2026-09-06 (최신)
+
+### 본문 터치 네비게이션 개선
+- **`chapter/[wr_id]/page.tsx`**: window-level click 이벤트로 변경 (고정 overlay div 제거)
+  - 위 15% 터치 → 페이지 업 스크롤 (overlay 없음)
+  - 아래 15% 터치 → 페이지 다운 스크롤 (overlay 없음)
+  - 가운데 70% 터치 → overlay(이전화/목록/다음화) 토글
+  - 링크/버튼 클릭 시 무시 (정상 동작)
+  - `e.stopPropagation()` 누락으로 overlay 닫힘 무한루프 버그 수정
+  - `window.location.href` → `router.push` (이동 속도 개선)
+- **회차 페이지 업/다운**: 4줄 overlap 추가 → 제거 (순수 viewport 단위로 복원)
+
+### 페이지 로딩 속도 최적화
+- **`[...slug]/route.ts`**: `proxyToNeon()`에서 `novels/{id}` 호출 시 챕터 1000개 동시 조회 제거
+  - 수정 전: 1.9s (챕터 1000개 포함)
+  - 수정 후: 0.67s (메타데이터만)
+- **`novel/[id]/page.tsx`**: `fetchMetadata(novel.title, "brave")` 제거
+  - Brave Search API 타임아웃(30s+)으로 페이지 hang 유발
+  - DB 메타데이터(`novel.description`, `genre`, `status`, `publisher`, `namuUrl`) 직접 표시로 대체
+- **`fetchChapters()`**: `limit` 기본값 100 → `PAGE_SIZE(20)` 명시 전달 (바로가기 페이지 계산 불일치 해결)
+- **회차목록 페이지네이션**: `PAGE_SIZE = 100` → `20`
+
+### 표지 이미지 개선
+- **라이브러리 메인 페이지**: 표지 이미지 복원 + 호버 시 메타데이터 오버레이
+  - 표지 + 상태 배지 (기본 표시)
+  - 호버 시 검은 오버레이 + 제목/작가/설명/장르/화수
+- **`image-proxy/route.ts`**: Vercel → devforge 백엔드 경유 (Vercel IP가 namu.wiki CDN에서 403 차단)
+  - 응답: `https://devforge.152-69-229-246.nip.io/api/novels/image-proxy?url=...`
+- **`novel/[id]/page.tsx`**: `Image` import + coverUrl 관련 코드 전체 제거
+- **EPUB 표지 임베드**: `_get_cover_path()`, `_build_cover_html()` 추가
+  - `covers/{novel_id}.webp` → EPUB 첫 페이지(cover.xhtml) + `set_cover()`
+  - spine 순서: `cover → nav → chap_0001...`
+
+### Vercel 라우팅 수정
+- **`[...slug]/route.ts`**: `proxyToNeon()` 조건에 `slug[1] !== 'epub'` && `!== 'image-proxy'` 추가
+  - EPUB/image-proxy/chapters 요청이 Neon proxy로 잘못 라우팅 → 501 버그 수정
+- **`apps/frontend/app/api/novels/[id]/chapters/route.ts`**: `limit` 기본값 20
+
+### DB 메타데이터 직접 표시
+- **`novel/[id]/page.tsx`**: `fetchMetadata()` 제거, `Novel` 인터페이스 필드 직접 표시
+  - `description` → 소개글
+  - `namuUrl` → 나무위키 링크
+  - `publisher` → 출판사
+  - `genre`, `status` → 기존 유지
+- **`services/data.py`**: `get_novel_detail()`가 `meta.json` 우선 읽도록 수정
+  - 수정 전: 항상 `author="미상"`, `coverUrl=null`
+  - 수정 후: `meta.json`의 author, description, genre 등 반영
+
+### EPUB 품질 개선
+- **`services/epub.py`**:
+  - RIDIBatang.otf CSS `format("truetype")` → `format("opentype")` (.otf 자동 감지)
+  - `_build_main_css()`: 4개 폰트 각각 `@font-face` 생성
+  - EPUB 표지 이미지 임베드 (`covers/` 디렉토리)
+  - `set_cover(create_page=False)` + 직접 `EpubHtml` 추가 (중복 방지)
+
+### 시스템 보안 버그 수정
+- **`scripts/dual_metadata_ssot.py`**, **`brave_book_url_search.py`**: 하드코딩된 Neon PostgreSQL 연결 문자열 제거
+  - `NEON_DATABASE_URL` 환경변수 사용으로 변경
+- **`metadata_namu.py`**: `download_cover_to` 매개변수가 함수명 가려 `TypeError` 발생
+  - `download_cover_to(...)` → `download_cover(...)` 함수 직접 호출
+  - `_fetch_binary()`: `str.startswith(bytes)` 타입오류 수정 (encode 후 bytes 비교)
+
+### ebook-watcher 시스템 개선
+- **`ebook-watcher.service`**: `Type=simple` + `Restart=always` + `RestartSec=30` → `Type=oneshot` + `Restart=no`
+  - 기존: 236회 재시작 루프
+  - 변경: timer(15분)가 트리거, 종료 후 대기
+- **`ebook_worker.py`**:
+  - `_check_bookto31_alive()`: `requests.get()` → `bookto31._fetch_with_flaresolverr(rate_limit=False)` (FlareSolverr 우회)
+  - `save_queue()` 필터 역전 버그 수정: `not any(...)` → `any(...)` (성공한 챕터가 큐에 남고 실패한 게 제거되던 버그)
+  - `CHAPTER_DELAY_SEC = 300` (5분)
+  - `VENV_PATH` sys.path 추가 제거, `import requests as req` → `import requests`
+  - `_trigger_vercel_revalidate()` 불필요한 `is_new_novel` 파라미터 제거
+  - meta.json 저장 예외처리 추가
+- **`watchdog.py`**: `import requests` 상단으로 이동
+
+### 문서 업데이트
+- **docs/ 7개 파일 20건 수정**:
+  - GoNotoCurrent → 4개 폰트(NotoSansKR/RIDIBatang/MaruBuri/Literata) 전면 교체
+  - `/api/health` → `/health`
+  - ebook-watcher.service `Type=simple+Restart=always` → `Type=oneshot+Restart=no`
+  - RIDIBatang 라이선스, EPUB 구조 등
+
+## 2026-09-05
 
 ### EPUB 다운로드 수정
 - **`routers/novels.py`**: `novel_id` 공백→언더스코 변환 (DB 매칭 안 됨 해결)

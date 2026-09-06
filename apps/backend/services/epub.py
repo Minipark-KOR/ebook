@@ -31,6 +31,7 @@ from ebooklib.epub import (
 
 DATA_DIR = Path("/opt/ai_data/flaresolverr/novels")
 FONTS_DIR = Path("/opt/workspace/ebooklib/scripts/fonts")
+COVERS_DIR = Path("/opt/ai_data/flaresolverr/covers")
 
 # 4개 폰트 정의 (filename, font-family name, MIME type)
 FONTS = [
@@ -191,6 +192,34 @@ def _add_fonts_and_css(book: "EpubBook") -> None:
         book.add_item(font_item)
 
 
+def _get_cover_path(novel_id: str) -> Optional[Path]:
+    """소설 표지 이미지 경로 찾기 (covers/{novel_id}.{확장자})."""
+    for ext in (".webp", ".jpg", ".jpeg", ".png"):
+        p = COVERS_DIR / f"{novel_id}{ext}"
+        if p.exists():
+            return p
+    return None
+
+
+def _build_cover_html(title: str, cover_href: str) -> bytes:
+    """EPUB 표지 페이지 HTML."""
+    body = (
+        '<?xml version="1.0" encoding="utf-8"?>'
+        '<!DOCTYPE html>'
+        '<html xmlns="http://www.w3.org/1999/xhtml">'
+        "<head>"
+        f"<title>{title}</title>"
+        "</head>"
+        "<body>"
+        '<div style="text-align:center; margin:0 auto; padding:2em 0;">'
+        f'<img src="{cover_href}" alt="{title}" style="max-width:100%; height:auto; box-shadow:0 2px 8px rgba(0,0,0,.3);" />'
+        f"<h2 style=\"font-size:1.4em; margin-top:1em;\">{title}</h2>"
+        "</div>"
+        "</body></html>"
+    )
+    return body.encode("utf-8")
+
+
 def build_epub(novel_id: str) -> Optional[bytes]:
     """EPUB 바이트 생성.
 
@@ -238,6 +267,29 @@ def build_epub(novel_id: str) -> Optional[bytes]:
     # 4개 폰트 + CSS 임베드
     _add_fonts_and_css(book)
 
+    # 표지 이미지 임베드
+    cover_page = None
+    cover_path = _get_cover_path(novel_id)
+    if cover_path:
+        ext = cover_path.suffix.lower()
+        mime = {
+            ".webp": "image/webp",
+            ".jpg": "image/jpeg",
+            ".jpeg": "image/jpeg",
+            ".png": "image/png",
+        }.get(ext, "image/webp")
+        with open(cover_path, "rb") as f:
+            cover_bytes = f.read()
+        book.set_cover(f"cover{ext}", cover_bytes, create_page=False)
+        cover_page = EpubHtml(
+            uid="cover",
+            title="표지",
+            file_name="cover.xhtml",
+            lang=language,
+            content=_build_cover_html(title, f"cover{ext}"),
+        )
+        book.add_item(cover_page)
+
     # 챕터 변환
     chapter_items = []
     for idx, chap_file in enumerate(chapter_files, 1):
@@ -264,7 +316,7 @@ def build_epub(novel_id: str) -> Optional[bytes]:
     book.toc = tuple(chapter_items)
     book.add_item(EpubNcx())
     book.add_item(EpubNav())
-    book.spine = ["nav", *chapter_items]
+    book.spine = (["cover"] if cover_page else []) + ["nav", *chapter_items]
 
     buf = io.BytesIO()
     write_epub(buf, book)

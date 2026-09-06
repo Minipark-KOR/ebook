@@ -30,7 +30,7 @@ export default function NovelPage() {
   useEffect(() => {
     if (!novelId) return;
 
-    Promise.all([fetchNovel(novelId), fetchChapters(novelId, page)])
+    Promise.all([fetchNovel(novelId), fetchChapters(novelId, page, PAGE_SIZE)])
       .then(([novelData, chaptersData]) => {
         setNovel(novelData);
         setChapters(chaptersData.data);

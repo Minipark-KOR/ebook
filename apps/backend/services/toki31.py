@@ -1,220 +1,217 @@
 #!/usr/bin/env python3
-# Status: experimental
+# Status: refactored (Phase 4)
 # Path: ebooklib/apps/backend/services/toki31.py
-"""toki31.com (뉴토끼) 크롤러 - 일반 PC 헤더 + 무료 KR 프록시 자동 failover
+"""toki31.com (뉴토끼) 크롤러 - curl_cffi TLS fingerprint 위장 + Next.js RSC 파싱
 
 배경:
 - toki31은 CloudFront에서 ASN 차단(Oracle 등 datacenter) + KR_ONLY 국가 검증을 한다.
-- 헤더 위장만으로는 우회 불가. residential IP(KR)가 필요하다.
-- 무료 KR proxy 리스트(proxyscrape.com)를 주기적으로 가져와 동작하는 proxy만
-  캐시한 뒤 자동 failover한다.
+- curl_cffi chrome131 impersonation으로 TLS fingerprint 위장 → proxy 불필요.
+- PoC 검증 (2026-09-06): Oracle datacenter IP에서도 HTTP 200 성공.
 
-주의:
-- toki31의 CloudFront geo-IP는 일부 Cloudflare IP 대역(104.28.x.x)을 CZ로 오분류한다.
-  같은 residential IP여도 CloudFront로 통과 시 가끔 CZ로 감지되어 차단될 수 있다.
-- 응답 본문은 JS 렌더링 전 HTML이므로 일부 동적 페이지는 SSR 결과를 못 받을 수 있다.
-- 200 OK를 주는 경로(/, /novel)와 403을 주는 경로(/novel/updates, /rank)가 있다.
+리팩터링 (2026-09-06):
+- requests + 무료 KR proxy → lib.curl_session (curl_cffi)
+- proxy pool 관리 로직 전체 제거
+- Next.js RSC payload 파서 추가
 """
 
-import threading
-import time
-from typing import Optional, Union
+import re
+from typing import Optional, Union, List, Dict
 
-import requests
+from lib.curl_session import create_curl_session
 
 
 BASE_URL = "https://toki31.com"
 
-PROXY_SOURCES = [
-    (
-        "https://api.proxyscrape.com/v4/free-proxy-list/get"
-        "?request=display_proxies&proxy_format=protocolipport"
-        "&format=text&country=kr"
-    ),
-]
-
-VERIFY_URL = "https://toki31.com/"  # 항상 200을 주는 루트
-REFRESH_INTERVAL = 300  # 5분마다 proxy 풀 새로고침
-PROXY_TIMEOUT = 10
-VERIFY_TIMEOUT = 12
-MAX_ATTEMPTS = 5
-
-
-_proxy_lock = threading.Lock()
-_proxies: list[dict] = []
-_proxies_loaded_at: float = 0.0
-
-
-def _build_headers() -> dict:
-    """일반 Windows Chrome처럼 보이게 하는 헤더.
-
-    주의: Accept-Encoding은 반드시 'gzip, deflate, br'이어야 한다.
-    'identity'는 toki31 CloudFront에서 KR_ONLY 오분류를 일으킨다.
-    """
-    return {
-        "User-Agent": (
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-            "AppleWebKit/537.36 (KHTML, like Gecko) "
-            "Chrome/126.0.0.0 Safari/537.36"
-        ),
-        "Accept": (
-            "text/html,application/xhtml+xml,application/xml;q=0.9,"
-            "image/avif,image/webp,image/apng,*/*;q=0.8,"
-            "application/signed-exchange;v=b3;q=0.7"
-        ),
-        "Accept-Language": "ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7",
-        "Accept-Encoding": "gzip, deflate, br",
-        "Cache-Control": "max-age=0",
-        "Connection": "keep-alive",
-        "DNT": "1",
-        "Sec-Ch-Ua": '"Not_A Brand";v="8", "Chromium";v="120", "Google Chrome";v="120"',
-        "Sec-Ch-Ua-Mobile": "?0",
-        "Sec-Ch-Ua-Platform": '"Windows"',
-        "Sec-Fetch-Dest": "document",
-        "Sec-Fetch-Mode": "navigate",
-        "Sec-Fetch-Site": "none",
-        "Sec-Fetch-User": "?1",
-        "Upgrade-Insecure-Requests": "1",
-    }
-
-
-def _parse_proxy_line(line: str) -> Optional[dict]:
-    line = line.strip()
-    if not line:
-        return None
-    if "://" in line:
-        scheme, rest = line.split("://", 1)
-    else:
-        scheme, rest = "http", line
-    return {"scheme": scheme, "url": rest}
-
-
-def _fetch_proxy_candidates() -> list[dict]:
-    candidates: list[dict] = []
-    for src in PROXY_SOURCES:
-        try:
-            r = requests.get(src, timeout=15)
-            if r.status_code != 200:
-                continue
-            for line in r.text.splitlines():
-                p = _parse_proxy_line(line)
-                if p:
-                    candidates.append(p)
-        except Exception:
-            continue
-    return candidates
-
-
-def _verify_proxy(proxy: dict) -> bool:
-    """후보 proxy가 toki31에 200으로 도달하는지 검증 (루트 페이지 기준)."""
-    proxies = {proxy["scheme"]: f"{proxy['scheme']}://{proxy['url']}"}
-    try:
-        resp = requests.get(
-            VERIFY_URL,
-            proxies=proxies,
-            timeout=VERIFY_TIMEOUT,
-            allow_redirects=False,
-            headers=_build_headers(),
-        )
-        return resp.status_code == 200
-    except Exception:
-        return False
-
-
-def _refresh_proxies(force: bool = False) -> None:
-    """proxy 풀 검증 후 캐시 갱신."""
-    global _proxies, _proxies_loaded_at
-    with _proxy_lock:
-        now = time.time()
-        if not force and (now - _proxies_loaded_at) < REFRESH_INTERVAL and _proxies:
-            return
-
-        candidates = _fetch_proxy_candidates()
-        seen: set[str] = set()
-        unique: list[dict] = []
-        for c in candidates:
-            key = f"{c['scheme']}://{c['url']}"
-            if key not in seen:
-                seen.add(key)
-                unique.append(c)
-
-        verified: list[dict] = []
-        for c in unique:
-            if _verify_proxy(c):
-                verified.append(c)
-            if len(verified) >= 10:
-                break
-
-        if verified:
-            _proxies = verified
-            _proxies_loaded_at = now
-        elif not _proxies:
-            _proxies_loaded_at = now
-
-
-def _create_session_with_proxy() -> Optional[requests.Session]:
-    """동작하는 proxy로 세션 생성. 풀 비면 새로 검증."""
-    _refresh_proxies()
-    with _proxy_lock:
-        if not _proxies:
-            return None
-        proxy = _proxies[0]
-    session = requests.Session()
-    session.headers.update(_build_headers())
-    session.proxies = {
-        proxy["scheme"]: f"{proxy['scheme']}://{proxy['url']}",
-    }
-    return session
-
-
-def _pop_current_proxy() -> None:
-    with _proxy_lock:
-        if _proxies:
-            _proxies.pop(0)
-
-
-def _fetch_with_failover(url: str) -> Optional[str]:
-    """proxy 자동 failover하면서 url 요청. 모든 proxy 실패 시 None."""
-    last_err: Optional[Exception] = None
-    for _ in range(MAX_ATTEMPTS):
-        session = _create_session_with_proxy()
-        if session is None:
-            time.sleep(2)
-            _refresh_proxies(force=True)
-            continue
-        try:
-            resp = session.get(url, timeout=15, allow_redirects=True)
-            if resp.status_code == 200:
-                return resp.text
-            if resp.status_code in (403, 429, 503):
-                _pop_current_proxy()
-                continue
-            resp.raise_for_status()
-            return resp.text
-        except Exception as e:
-            last_err = e
-            _pop_current_proxy()
-            continue
-    if last_err:
-        raise last_err
-    return None
+# curl_cffi 세션 (chrome131 impersonation)
+_session = create_curl_session(impersonate="chrome131")
 
 
 def fetch_home() -> Optional[str]:
     """toki31 홈 페이지 HTML."""
-    return _fetch_with_failover(f"{BASE_URL}/")
+    return _get(f"{BASE_URL}/")
+
+
+def fetch_ing() -> Optional[str]:
+    """연재중 웹툰/소설 목록 (RSC payload 포함)."""
+    return _get(f"{BASE_URL}/ing")
 
 
 def fetch_novel_list() -> Optional[str]:
     """toki31 소설 목록 페이지 HTML (/novel)."""
-    return _fetch_with_failover(f"{BASE_URL}/novel")
+    return _get(f"{BASE_URL}/novel")
 
 
 def fetch_novel_detail(novel_id: Union[int, str]) -> Optional[str]:
     """개별 소설 상세 페이지 HTML."""
-    return _fetch_with_failover(f"{BASE_URL}/novel/{novel_id}")
+    return _get(f"{BASE_URL}/novel/{novel_id}")
 
 
 def fetch_chapter(novel_id: Union[int, str], chapter_id: Union[int, str]) -> Optional[str]:
     """소설 본문(회차) HTML."""
-    return _fetch_with_failover(f"{BASE_URL}/novel/{novel_id}/{chapter_id}")
+    return _get(f"{BASE_URL}/novel/{novel_id}/{chapter_id}")
+
+
+def _get(url: str, timeout: int = 15) -> Optional[str]:
+    """curl_cffi GET 요청. 실패 시 None."""
+    try:
+        resp = _session.get(url, timeout=timeout)
+        if resp.status_code == 200:
+            return resp.text
+        return None
+    except Exception:
+        return None
+
+
+# --- Next.js RSC payload 파서 ---
+
+def parse_rsc_payload(html: str) -> List[Dict]:
+    """RSC payload에서 에피소드 데이터 추출.
+
+    Next.js App Router의 RSC payload는 <script> 태그에:
+    self.__next_f.push([1, "..."])
+
+    Returns:
+        [{episodeCount, latestEpisodeNumber, rating, ...}, ...]
+    """
+    # RSC payload 추출
+    rsc_scripts = re.findall(
+        r'<script[^>]*>self\.__next_f\.push\(\[1,"(.*?)"\]\)</script>',
+        html,
+        re.DOTALL,
+    )
+
+    episodes = []
+    for script in rsc_scripts:
+        # JSON 문자열 디코딩
+        try:
+            decoded = script.encode().decode('unicode_escape')
+        except Exception:
+            decoded = script
+
+        # 에피소드 데이터 패턴 매칭
+        # Next.js RSC는 복잡한 구조지만, 핵심 데이터는 JSON-like 형태
+        ep_matches = re.findall(
+            r'"episodeCount"\s*:\s*(\d+)|'
+            r'"latestEpisodeNumber"\s*:\s*(\d+)|'
+            r'"rating"\s*:\s*([\d.]+)|'
+            r'"title"\s*:\s*"([^"]*)"',
+            decoded,
+        )
+
+        if ep_matches:
+            ep_data = {}
+            for match in ep_matches:
+                if match[0]:
+                    ep_data['episodeCount'] = int(match[0])
+                elif match[1]:
+                    ep_data['latestEpisodeNumber'] = int(match[1])
+                elif match[2]:
+                    ep_data['rating'] = float(match[2])
+                elif match[3]:
+                    ep_data['title'] = match[3]
+            if ep_data:
+                episodes.append(ep_data)
+
+    return episodes
+
+
+def extract_episode_data(html: str) -> List[Dict]:
+    """/ing 페이지에서 episode 데이터 추출.
+
+    HTML 구조에서 회차 정보를 파싱:
+    - 회차 번호, 평점, 좋아요 수 등
+
+    Returns:
+        [{episodeCount, latestEpisodeNumber, rating, title, ...}, ...]
+    """
+    episodes = []
+
+    # RSC payload가 있으면 우선 사용
+    rsc_episodes = parse_rsc_payload(html)
+    if rsc_episodes:
+        return rsc_episodes
+
+    # RSC payload가 없으면 HTML 파싱
+    # 일반적인 Next.js 카드 구조
+    card_pattern = re.compile(
+        r'<a[^>]*href="[^"]*/novel/(\d+)[^"]*"[^>]*>(.*?)</a>',
+        re.DOTALL,
+    )
+
+    for m in card_pattern.finditer(html):
+        novel_id = m.group(1)
+        inner = m.group(2)
+
+        # 제목 추출
+        title_m = re.search(r'<[^>]*class="[^"]*title[^"]*"[^>]*>([^<]+)', inner)
+        title = title_m.group(1).strip() if title_m else ""
+
+        # 회차 정보 추출
+        ep_m = re.search(r'(\d+)\s*화', inner)
+        episode_count = int(ep_m.group(1)) if ep_m else 0
+
+        # 평점 추출
+        rating_m = re.search(r'(\d+\.?\d*)\s*점|rating["\s:]+(\d+\.?\d*)', inner)
+        rating = float(rating_m.group(1) or rating_m.group(2)) if rating_m else 0.0
+
+        if title or episode_count:
+            episodes.append({
+                'novelId': novel_id,
+                'title': title,
+                'episodeCount': episode_count,
+                'rating': rating,
+            })
+
+    return episodes
+
+
+def parse_chapter_body(html: str) -> str:
+    """회차 본문 HTML에서 본문 텍스트 추출.
+
+    toki31은 Next.js 기반이나 본문 구조는 유사.
+    """
+    # Next.js RSC payload에서 본문 추출 시도
+    rsc_scripts = re.findall(
+        r'<script[^>]*>self\.__next_f\.push\(\[1,"(.*?)"\]\)</script>',
+        html,
+        re.DOTALL,
+    )
+
+    for script in rsc_scripts:
+        try:
+            decoded = script.encode().decode('unicode_escape')
+        except Exception:
+            decoded = script
+
+        # 본문 패턴 (일반적인 웹소설 본문)
+        body_m = re.search(
+            r'"content"\s*:\s*"((?:[^"\\]|\\.){100,})"',
+            decoded,
+        )
+        if body_m:
+            body = body_m.group(1)
+            # 유니코드 이스케이프 해제
+            try:
+                body = body.encode().decode('unicode_escape')
+            except Exception:
+                pass
+            # HTML 태그 제거
+            body = re.sub(r'<[^>]+>', '\n', body)
+            body = re.sub(r'\n\s*\n', '\n', body)
+            return body.strip()
+
+    # RSC payload에 없으면 일반 HTML 파싱
+    body_m = re.search(
+        r'<div[^>]*class="[^"]*content[^"]*"[^>]*>(.*?)</div>',
+        html,
+        re.DOTALL,
+    )
+    if body_m:
+        body = body_m.group(1)
+        body = re.sub(r'<script[^>]*>.*?</script>', '', body, flags=re.DOTALL)
+        body = re.sub(r'<style[^>]*>.*?</style>', '', body, flags=re.DOTALL)
+        body = re.sub(r'<[^>]+>', '\n', body)
+        body = re.sub(r'\n\s*\n', '\n', body)
+        return body.strip()
+
+    return ""

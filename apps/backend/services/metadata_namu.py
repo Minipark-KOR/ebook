@@ -22,6 +22,12 @@ from urllib.parse import quote
 
 import requests
 
+from lib.flaresolverr_client import FlareSolverrSession
+
+
+# namu.wiki 전용 FlareSolverr 세션 (rate_limit=False: namu.wiki 자체 30분 제한 사용)
+_namu_fs = FlareSolverrSession(rate_limit=False)
+
 
 # namu.wiki 전용 rate limiter
 _NAMU_DB_PATH = Path("/opt/ai_data/flaresolverr/namu_rate_limiter.db")
@@ -117,20 +123,14 @@ def _fetch_url(url: str, timeout: int = 15) -> Optional[str]:
 
     namu.wiki가 Cloudflare Turnstile/봇 탐지를 적용하므로
     FlareSolverr 헤드리스 브라우저로 우회.
+
+    Note: FlareSolverrSession(rate_limit=False) 사용.
+    namu.wiki는 자체 30분 rate limiter(_namu_rate_limit)가 별도로 있음.
     """
-    try:
-        from services.bookto31 import _fetch_with_flaresolverr
-        return _fetch_with_flaresolverr(url, rate_limit=False)
-    except ImportError:
-        # 폴백: requests (Cloudflare가 차단할 수 있음)
-        try:
-            resp = requests.get(url, headers=_make_headers(), timeout=timeout)
-            _namu_record()
-            if resp.status_code == 200:
-                return resp.text
-        except Exception:
-            return None
-        return None
+    html = _namu_fs.fetch(url)
+    if html:
+        _namu_record()
+    return html or None
 
 
 def _fetch_binary(url: str, timeout: int = 30) -> Optional[bytes]:
@@ -139,24 +139,18 @@ def _fetch_binary(url: str, timeout: int = 30) -> Optional[bytes]:
     Returns:
         이미지 바이트 또는 None
     """
-    try:
-        # 1순위: FlareSolverr (Cloudflare 우회)
-        from services.bookto31 import _fetch_with_flaresolverr
-        html_text = _fetch_with_flaresolverr(url, rate_limit=False)
-        if html_text:
-            # HTML 응답일 수 있음 (Cloudflare challenge page)
-            # 이미지로 보이려면 시작 바이트 확인 (str → bytes 변환 후 비교)
-            raw = html_text.encode('utf-8') if isinstance(html_text, str) else html_text
-            if raw.startswith(b'\x89PNG') or raw.startswith(b'\xff\xd8\xff') or \
-               raw.startswith(b'RIFF') or raw.startswith(b'<?xml'):
-                return raw
-    except Exception:
-        pass
+    # 1순위: FlareSolverr (Cloudflare 우회)
+    html_text = _namu_fs.fetch(url)
+    if html_text:
+        raw = html_text.encode('utf-8') if isinstance(html_text, str) else html_text
+        if raw.startswith(b'\x89PNG') or raw.startswith(b'\xff\xd8\xff') or \
+           raw.startswith(b'RIFF') or raw.startswith(b'<?xml'):
+            _namu_record()
+            return raw
 
     # 2순위: requests (간단 헤더)
     try:
         headers = _make_headers()
-        # image 확장자
         if 'i.namu.wiki' in url:
             headers['Referer'] = 'https://namu.wiki/'
         resp = requests.get(url, headers=headers, timeout=timeout, stream=True)

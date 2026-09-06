@@ -1,23 +1,26 @@
 #!/usr/bin/env python3
-# Status: refactored (Phase 4 + proxy)
+# Status: refactored (Phase 4 + proxy + playwright)
 # Path: ebooklib/apps/backend/services/toki31.py
-"""toki31.com (뉴토끼) 크롤러 - curl_cffi TLS fingerprint 위장 + Next.js RSC 파싱
+"""toki31.com (뉴토끼) 크롤러 - curl_cffi + Playwright
 
 배경:
 - toki31은 Cloudflare에서 403 차단 (router/{id}, /rank, /search).
 - curl_cffi chrome131 impersonation으로 TLS fingerprint 위장.
 - 한국 주거용 프록시 (MaskProxy/DataImpulse) 필요.
+- 챕터 본문은 anti-bot 보호 (ad-ack + AES-GCM 암호화)로 Playwright 필요.
 
 리팩터링 (2026-09-06):
 - requests + 무료 KR proxy → lib.curl_session (curl_cffi)
 - proxy pool 관리 로직 전체 제거
 - Next.js RSC payload 파서 추가
 - 한국 주거용 프록시 (MaskProxy + DataImpulse) 적용
+- Playwright 기반 챕터 본문 추출 (lib.toki31_playwright)
 """
 
+import asyncio
 import logging
 import re
-from typing import Optional, Union, List, Dict
+from typing import Optional, Union, List, Dict, Tuple
 
 from lib.proxy_session import (
     get_proxy_session_with_fallback,
@@ -57,6 +60,34 @@ def fetch_novel_detail(novel_id: Union[int, str]) -> Optional[str]:
 def fetch_chapter(novel_id: Union[int, str], chapter_id: Union[int, str]) -> Optional[str]:
     """소설 본문(회차) HTML."""
     return _get(f"{BASE_URL}/novel/{novel_id}/{chapter_id}")
+
+
+def fetch_chapter_content(novel_id: Union[int, str], chapter_id: Union[int, str]) -> Optional[Tuple[str, str]]:
+    """소설 본문 텍스트 추출 (Playwright 사용).
+
+    Returns:
+        (title, content_text) or None on failure
+    """
+    from lib.toki31_playwright import fetch_chapter_content_full
+
+    try:
+        loop = asyncio.get_event_loop()
+        if loop.is_running():
+            # 이미 이벤트 루프가 실행 중인 경우 (FastAPI 등)
+            import concurrent.futures
+            with concurrent.futures.ThreadPoolExecutor() as pool:
+                future = pool.submit(
+                    asyncio.run,
+                    fetch_chapter_content_full(str(novel_id), str(chapter_id))
+                )
+                return future.result(timeout=120)
+        else:
+            return loop.run_until_complete(
+                fetch_chapter_content_full(str(novel_id), str(chapter_id))
+            )
+    except Exception as e:
+        logger.error(f"Chapter content fetch failed: {e}")
+        return None
 
 
 def _get(url: str, timeout: int = 15) -> Optional[str]:

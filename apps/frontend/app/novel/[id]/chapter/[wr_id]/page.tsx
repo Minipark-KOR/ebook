@@ -81,11 +81,11 @@ export default function ChapterPage() {
       const overlap = 4 * lineH;
 
       if (ratio < 0.15) {
-        // 페이지 업: 현재 뷰포트 위쪽으로 overlap만큼 걸쳐서 이동
-        window.scrollBy({ top: -(window.innerHeight - overlap), behavior: "smooth" });
+        // 페이지 업: 4줄만큼 더 올라가서 겹침 없이 깔끔하게
+        window.scrollBy({ top: -(window.innerHeight + overlap), behavior: "smooth" });
       } else if (ratio > 0.85) {
-        // 페이지 다운: 현재 뷰포트 아래쪽이 overlap만큼 겹치게 이동
-        window.scrollBy({ top: window.innerHeight - overlap, behavior: "smooth" });
+        // 페이지 다운: 4줄만큼 더 내려가서 겹침 없이
+        window.scrollBy({ top: window.innerHeight + overlap, behavior: "smooth" });
       } else {
         setNavOpen(true);
       }

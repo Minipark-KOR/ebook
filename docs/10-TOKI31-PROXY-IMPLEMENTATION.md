@@ -447,14 +447,30 @@ def test_toki31_chapter_with_proxy():
 | [02-BOT-BYPASS.md](02-BOT-BYPASS.md) | 봇 우회 전략 |
 | [00-ARCHITECTURE.md](00-ARCHITECTURE.md) | 시스템 아키텍처 |
 
-## 10. 다음 단계
+## 10. 구현 상태
 
-0. **선행 진단 (권장)**: 무료 KR proxy 또는 KR VPN으로 `/novel/{id}` 1건 접근 테스트 — geo-block 가설 검증
-   - 성공: 프록시 구독 진행 (아래 1~6)
-   - 실패(봇 감지): IP 로테이션/브라우저 fingerprint 방식 재검토 필요
-1. DataImpulse 계정 생성 및 API 키 발급 (최소 $5)
-2. MaskProxy 계정 생성 및 API 키 발급
-3. `lib/proxy_session.py` 구현 (curl_session 래핑)
-4. `services/toki31.py` 수정
-5. 테스트 실행
-6. 프로덕션 배포
+### ✅ 완료 (2026-09-06)
+
+| 단계 | 파일 | 상태 |
+|------|------|------|
+| Phase 1.1 | `lib/proxy_session.py` | ✅ 신규 생성 |
+| Phase 1.2 | `.env` | ✅ 환경변수 추가 |
+| Phase 1.3 | `scripts/test_proxy.py` | ✅ 테스트 스크립트 |
+| Phase 2.1 | `services/toki31.py` | ✅ 프록시 적용 |
+| Phase 2.2 | `services/toki31.py` | ✅ fallback 로직 |
+| Phase 2.3 | 테스트 실행 | ✅ 통과 (프록시 미설정 시 스킵) |
+
+### ⏳ 남은 단계
+
+0. **프록시 계정 생성** (MaskProxy/DataImpulse)
+1. **환경변수 설정** (`.env`에 프록시 키 입력)
+2. **실제 연결 테스트** (프록시 설정 후 `python scripts/test_proxy.py`)
+3. **프로덕션 배포**
+
+### 다음 단계
+
+1. MaskProxy 계정 생성: https://maskproxy.io
+2. DataImpulse 계정 생성: https://dataimpulse.com ($5/5GB)
+3. `.env` 파일에 프록시 키 입력
+4. `python scripts/test_proxy.py`로 연결 테스트
+5. toki31 본문 수집 테스트

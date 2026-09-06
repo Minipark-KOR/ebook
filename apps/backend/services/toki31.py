@@ -1,29 +1,37 @@
 #!/usr/bin/env python3
-# Status: refactored (Phase 4)
+# Status: refactored (Phase 4 + proxy)
 # Path: ebooklib/apps/backend/services/toki31.py
 """toki31.com (뉴토끼) 크롤러 - curl_cffi TLS fingerprint 위장 + Next.js RSC 파싱
 
 배경:
-- toki31은 CloudFront에서 ASN 차단(Oracle 등 datacenter) + KR_ONLY 국가 검증을 한다.
-- curl_cffi chrome131 impersonation으로 TLS fingerprint 위장 → proxy 불필요.
-- PoC 검증 (2026-09-06): Oracle datacenter IP에서도 HTTP 200 성공.
+- toki31은 Cloudflare에서 403 차단 (router/{id}, /rank, /search).
+- curl_cffi chrome131 impersonation으로 TLS fingerprint 위장.
+- 한국 주거용 프록시 (MaskProxy/DataImpulse) 필요.
 
 리팩터링 (2026-09-06):
 - requests + 무료 KR proxy → lib.curl_session (curl_cffi)
 - proxy pool 관리 로직 전체 제거
 - Next.js RSC payload 파서 추가
+- 한국 주거용 프록시 (MaskProxy + DataImpulse) 적용
 """
 
+import logging
 import re
 from typing import Optional, Union, List, Dict
 
-from lib.curl_session import create_curl_session
+from lib.proxy_session import (
+    get_proxy_session_with_fallback,
+    get_maskproxy_config,
+    get_dataimpulse_config,
+    create_proxy_session,
+)
 
+logger = logging.getLogger(__name__)
 
 BASE_URL = "https://toki31.com"
 
-# curl_cffi 세션 (chrome131 impersonation)
-_session = create_curl_session(impersonate="chrome131")
+# 한국 주거용 프록시 세션 (MaskProxy Primary, DataImpulse Fallback)
+_session, _active_proxy = get_proxy_session_with_fallback()
 
 
 def fetch_home() -> Optional[str]:
@@ -52,14 +60,47 @@ def fetch_chapter(novel_id: Union[int, str], chapter_id: Union[int, str]) -> Opt
 
 
 def _get(url: str, timeout: int = 15) -> Optional[str]:
-    """curl_cffi GET 요청. 실패 시 None."""
+    """curl_cffi GET 요청. 실패 시 fallback 프록시로 재시도."""
+    if _session is None:
+        logger.error("프록시 미설정 - _get() 호출 불가")
+        return None
+
     try:
         resp = _session.get(url, timeout=timeout)
         if resp.status_code == 200:
             return resp.text
+
+        # 403 또는 프록시 관련 에러 시 fallback 시도
+        if resp.status_code in (403, 407, 502, 503):
+            return _get_with_fallback(url, timeout)
+
         return None
     except Exception:
+        return _get_with_fallback(url, timeout)
+
+
+def _get_with_fallback(url: str, timeout: int) -> Optional[str]:
+    """Fallback 프록시로 재시도."""
+    if _active_proxy is None:
         return None
+
+    maskproxy = get_maskproxy_config()
+    dataimpulse = get_dataimpulse_config()
+
+    # 현재 프록시와 다른 것으로 시도
+    fallback = dataimpulse if _active_proxy.name == "maskproxy" else maskproxy
+
+    if fallback.is_configured:
+        try:
+            session = create_proxy_session("chrome131", fallback)
+            resp = session.get(url, timeout=timeout)
+            if resp.status_code == 200:
+                logger.info(f"Fallback 성공: {fallback.name}")
+                return resp.text
+        except Exception:
+            pass
+
+    return None
 
 
 # --- Next.js RSC payload 파서 ---

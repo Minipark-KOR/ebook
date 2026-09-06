@@ -55,6 +55,7 @@ ebooklib은 한국 웹소설을 자동으로 수집 → DB 저장 → EPUB으로
 │    - lib/user_agent.py          : Chrome 헤더 빌더                │
 │    - lib/flaresolverr_client.py : FlareSolverr 세션 관리          │
 │    - lib/curl_session.py        : curl_cffi 세션 팩토리           │
+│    - lib/proxy_session.py       : 한국 주거용 프록시 관리          │
 │    - lib/storage.py             : 챕터 저장/메타 관리              │
 │    - lib/rate_limiter.py        : SQLite rate limiter             │
 └─────────────────────────────────────────────────────────────────┘
@@ -223,6 +224,12 @@ ebooklib은 한국 웹소설을 자동으로 수집 → DB 저장 → EPUB으로
           │
           ▼
 ┌────────────────────┐
+│ lib/proxy_session  │ ← 한국 주거용 프록시
+│ .py                │    MaskProxy + DataImpulse
+└─────────┬──────────┘
+          │
+          ▼
+┌────────────────────┐
 │ lib/curl_session.py│ ← curl_cffi (TLS 위장)
 │ - create_curl_     │    impersonate="chrome131"
 │   session()        │
@@ -230,7 +237,7 @@ ebooklib은 한국 웹소설을 자동으로 수집 → DB 저장 → EPUB으로
           │
           ▼
 ┌────────────────────┐
-│ toki31.com         │ ← CloudFront + Next.js
+│ toki31.com         │ ← Cloudflare + Next.js
 │ (뉴토끼)            │
 └────────────────────┘
 ```

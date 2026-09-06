@@ -76,17 +76,23 @@ export default function ChapterPage() {
       const h = window.innerHeight;
       const ratio = y / h;
 
+      // 한 줄 높이 = fontSize * lineHeight(1.8), 4줄 여백
+      const lineH = fontSize * 1.8;
+      const overlap = 4 * lineH;
+
       if (ratio < 0.15) {
-        window.scrollBy({ top: -window.innerHeight * 0.8, behavior: "smooth" });
+        // 페이지 업: 현재 뷰포트 위쪽으로 overlap만큼 걸쳐서 이동
+        window.scrollBy({ top: -(window.innerHeight - overlap), behavior: "smooth" });
       } else if (ratio > 0.85) {
-        window.scrollBy({ top: window.innerHeight * 0.8, behavior: "smooth" });
+        // 페이지 다운: 현재 뷰포트 아래쪽이 overlap만큼 겹치게 이동
+        window.scrollBy({ top: window.innerHeight - overlap, behavior: "smooth" });
       } else {
         setNavOpen(true);
       }
     };
     window.addEventListener("click", handler);
     return () => window.removeEventListener("click", handler);
-  }, [navOpen]);
+  }, [navOpen, fontSize]);
 
   if (loading) {
     return (

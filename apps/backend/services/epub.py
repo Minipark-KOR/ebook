@@ -280,9 +280,13 @@ def build_epub(novel_id: str) -> Optional[bytes]:
         }.get(ext, "image/webp")
         with open(cover_path, "rb") as f:
             cover_bytes = f.read()
-        book.set_cover(f"cover{ext}", cover_bytes, create_page=False)
+        
+        # set_cover로 이미지 임베드 (create_page=True로 표지 페이지 자동 생성)
+        book.set_cover(f"cover{ext}", cover_bytes, create_page=True)
+        
+        # 수동으로 커스텀 표지 페이지 생성 (set_cover가 생성한 기본 페이지 대체)
         cover_page = EpubHtml(
-            uid="cover",
+            uid="cover_page",
             title="표지",
             file_name="cover.xhtml",
             lang=language,
@@ -316,7 +320,12 @@ def build_epub(novel_id: str) -> Optional[bytes]:
     book.toc = tuple(chapter_items)
     book.add_item(EpubNcx())
     book.add_item(EpubNav())
-    book.spine = (["cover"] if cover_page else []) + ["nav", *chapter_items]
+    
+    # spine: cover(이미지) -> cover_page(커스텀 HTML) -> nav -> 챕터
+    if cover_page:
+        book.spine = ["cover", "cover_page", "nav", *chapter_items]
+    else:
+        book.spine = ["nav", *chapter_items]
 
     buf = io.BytesIO()
     write_epub(buf, book)

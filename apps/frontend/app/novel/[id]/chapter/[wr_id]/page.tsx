@@ -63,7 +63,7 @@ export default function ChapterPage() {
     return `/novel/${novelId}${qs ? `?${qs}` : ""}`;
   }
 
-  // 화면 터치/클릭: 위쪽 15% = 위로 스크롤, 아래쪽 15% = 아래로 스크롤, 가운데 = 회차목록
+  // 화면 터치: 위 15% = 이전화, 아래 15% = 다음화, 가운데 = 레이어 열기
   const handleTap = useCallback(
     (e: React.MouseEvent<HTMLDivElement>) => {
       const rect = e.currentTarget.getBoundingClientRect();
@@ -72,16 +72,17 @@ export default function ChapterPage() {
       const ratio = y / h;
 
       if (ratio < 0.15) {
-        // 위쪽 15%: 위로 스크롤 (이전 내용)
-        window.scrollBy({ top: -window.innerHeight * 0.8, behavior: "smooth" });
+        // 위쪽 15%: 이전화 이동
+        if (chapter?.prevChapter) goPrev();
       } else if (ratio > 0.85) {
-        // 아래쪽 15%: 아래로 스크롤 (다음 내용)
-        window.scrollBy({ top: window.innerHeight * 0.8, behavior: "smooth" });
+        // 아래쪽 15%: 다음화 이동
+        if (chapter?.nextChapter) goNext();
       } else {
-        setNavOpen((v) => !v);
+        // 가운데: 레이어 열기
+        setNavOpen(true);
       }
     },
-    []
+    [chapter, goPrev, goNext]
   );
 
   if (loading) {

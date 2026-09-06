@@ -223,7 +223,7 @@ def chrome_headers(version: str = "131") -> dict:
     }
 ```
 
-**영향 파일**: bookto31.py, toki31.py, healthcheck.py, ebook_worker.py
+**영향 파일**: bookto31.py, toki31.py, bookto31_healthcheck.py, ebook_worker.py
 
 ### 4.2 `lib/flaresolverr_client.py`
 
@@ -445,6 +445,7 @@ def extract_episode_data(html) -> List[Dict]:
 | 2 | `lib/flaresolverr_client.py` 생성 | 신규 |
 | 3 | `lib/curl_session.py` 생성 | 신규 |
 | 4 | `lib/storage.py` 생성 | 신규 |
+| 5 | 🔒 Phase 1 완료 시 `git tag phase1-complete` 생성 | — |
 
 **검증**: 기존 bookto31.py/toki31.py 변경 없이 새 lib만 import 가능한지 확인
 
@@ -491,7 +492,44 @@ def extract_episode_data(html) -> List[Dict]:
 
 ---
 
-## 7. 검증 기준
+## 7. 롤백 절차
+
+각 Phase 시작 전 `git tag`를 생성하고, 실패 시 아래 순서로 복구한다.
+
+### 공통 롤백 순서
+```bash
+# 1. 변경사항 스태시
+git stash
+
+# 2. Phase 직전 태그로 복구
+git checkout <phase-before-tag>
+
+# 3. systemd 서비스 재시작 (ebook-watcher만 해당)
+systemctl --user restart ebook-watcher.service
+
+# 4. 정상 동작 확인
+python3 -c "from services.bookto31 import fetch_home; print('OK:', fetch_home()[:100] if fetch_home() else 'FAIL')"
+```
+
+### Phase별 태그명
+| Phase | 시작 전 태그 | 실패 시 복구 대상 |
+|-------|------------|------------------|
+| Phase 1 | `phase1-complete` (완료 시점) | `git revert`로 Phase 1만 취소 가능 |
+| Phase 2 | `phase2-before` | Phase 1 lib 파일은 유지, bookto31.py만 복구 |
+| Phase 3 | `phase3-before` | metadata_namu.py만 복구 |
+| Phase 4 | `phase4-before` | toki31.py + lib/curl_session.py 복구 |
+| Phase 5 | `phase5-before` | ebook_worker.py + lib/storage.py 복구 |
+
+### Phase 2·4 실패 시 특이사항
+- Phase 2 실패: bookto31.py의 FlareSolverrSession 호출부가 잘못되면 **FlareSolverr 연결이 끊김** → `git checkout phase2-before` 후 FlareSolverr 컨테이너 재시작도 고려
+  ```bash
+  podman restart container-flaresolverr
+  ```
+- Phase 4 실패: toki31.py가 requests에서 curl_cffi로 변경된 후 **기존 proxy 로직이 제거됨** → 복구 시 `git checkout phase4-before`로 완전 복원
+
+---
+
+## 8. 검증 기준
 
 ### Phase 2 완료 조건
 ```bash
@@ -552,7 +590,7 @@ print(f'OK: lib.curl_session 통한 접속 성공')
 
 ---
 
-## 8. 보존 규칙
+## 9. 보존 규칙
 
 | 규칙 | 설명 |
 |------|------|

@@ -9,11 +9,11 @@ Fallback: DataImpulse ($1/GB)
 lib/curl_session.py.create_curl_session()을 래핑하여 프록시 설정만 추가.
 (curl_session이 이미 proxy 파라미터를 지원하므로 코드 중복 방지)
 
-환경변수:
+환경변수 (.env.local에서 로드):
   MASKPROXY_USER: MaskProxy 사용자명
   MASKPROXY_PASS: MaskProxy 비밀번호
-  MASKPROXY_HOST: MaskProxy 호스트 (기본: proxy.maskproxy.io)
-  MASKPROXY_PORT: MaskProxy 포트 (기본: 10000)
+  MASKPROXY_HOST: MaskProxy 호스트 (기본: proxy.maskproxy.net)
+  MASKPROXY_PORT: MaskProxy 포트 (기본: 12324)
 
   DATAIMPULSE_USER: DataImpulse 사용자명
   DATAIMPULSE_PASS: DataImpulse 비밀번호
@@ -25,10 +25,20 @@ import os
 import logging
 from typing import Optional, Tuple
 from dataclasses import dataclass
+from pathlib import Path
 
 from curl_cffi import requests as creq
 
 from lib.curl_session import create_curl_session
+
+# .env.local 파일에서 환경변수 로드
+_env_local = Path(__file__).parent.parent / ".env.local"
+if _env_local.exists():
+    for line in _env_local.read_text().splitlines():
+        line = line.strip()
+        if line and not line.startswith("#") and "=" in line:
+            key, _, value = line.partition("=")
+            os.environ.setdefault(key.strip(), value.strip())
 
 logger = logging.getLogger(__name__)
 

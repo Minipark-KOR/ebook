@@ -19,6 +19,7 @@ export default function ChapterPage() {
   const [listPage, setListPage] = useState<number | null>(null);
   const [fontSize, setFontSize] = useState(18);
   const [navOpen, setNavOpen] = useState(false);
+  const navOpenRef = useRef(false);
   const contentRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -37,7 +38,7 @@ export default function ChapterPage() {
   useEffect(() => {
     if (!navOpen) return;
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setNavOpen(false);
+      if (e.key === "Escape") { setNavOpen(false); navOpenRef.current = false; }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -70,12 +71,15 @@ export default function ChapterPage() {
       const target = e.target as HTMLElement;
       if (target.closest("a, button, input, [role='button']")) return;
 
-      // overlay 열려 있을 때: 가운데 클릭 시 닫기
-      if (navOpen) {
+      // ref로 navOpen 실시간 확인 (useState closure 이슈 방지)
+      if (navOpenRef.current) {
         const y = e.clientY;
         const h = window.innerHeight;
         const ratio = y / h;
-        if (ratio >= 0.15 && ratio <= 0.85) setNavOpen(false);
+        if (ratio >= 0.15 && ratio <= 0.85) {
+          setNavOpen(false);
+          navOpenRef.current = false;
+        }
         return;
       }
 
@@ -83,21 +87,18 @@ export default function ChapterPage() {
       const h = window.innerHeight;
       const ratio = y / h;
 
-      // 한 줄 높이 = fontSize * lineHeight(1.8), 4줄 여백
-      const lineH = fontSize * 1.8;
-      const overlap = 4 * lineH;
-
       if (ratio < 0.15) {
-        window.scrollBy({ top: -(window.innerHeight + overlap), behavior: "smooth" });
+        window.scrollBy({ top: -window.innerHeight, behavior: "smooth" });
       } else if (ratio > 0.85) {
-        window.scrollBy({ top: window.innerHeight + overlap, behavior: "smooth" });
+        window.scrollBy({ top: window.innerHeight, behavior: "smooth" });
       } else {
         setNavOpen(true);
+        navOpenRef.current = true;
       }
     };
     window.addEventListener("click", handler);
     return () => window.removeEventListener("click", handler);
-  }, [navOpen, fontSize]);
+  }, []);
 
   if (loading) {
     return (
@@ -211,7 +212,7 @@ export default function ChapterPage() {
           className="fixed inset-0 z-50 flex"
           role="dialog"
           aria-label="네비게이션"
-          onClick={() => setNavOpen(false)}
+          onClick={() => { setNavOpen(false); navOpenRef.current = false; }}
         >
           {/* Left zone: previous chapter */}
           <button
@@ -222,6 +223,7 @@ export default function ChapterPage() {
                 window.location.href = `/novel/${novelId}/chapter/${chapter.prevChapter}`;
               } else {
                 setNavOpen(false);
+                navOpenRef.current = false;
               }
             }}
             disabled={!chapter.prevChapter}
@@ -260,6 +262,7 @@ export default function ChapterPage() {
                 window.location.href = `/novel/${novelId}/chapter/${chapter.nextChapter}`;
               } else {
                 setNavOpen(false);
+                navOpenRef.current = false;
               }
             }}
             disabled={!chapter.nextChapter}

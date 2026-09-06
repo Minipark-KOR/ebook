@@ -208,7 +208,7 @@ export default function ChapterPage() {
           className="fixed inset-0 z-50 flex"
           role="dialog"
           aria-label="네비게이션"
-          onClick={() => { setNavOpen(false); navOpenRef.current = false; }}
+          onClick={(e) => { e.stopPropagation(); setNavOpen(false); navOpenRef.current = false; }}
         >
           {/* Left zone: previous chapter */}
           <button

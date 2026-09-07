@@ -88,18 +88,51 @@ def _parse_source() -> str:
 
 # === 1단계: DISCOVER — wr_id 발견 → 큐에 추가 ===
 
-def run_discover(wr_id: int, novel_title: str = "", max_pages: int = 50, source: str = "bookto31") -> int:
-    """북토끼 작품 메인에서 모든 회차 wr_id 발견 → 큐에 추가."""
+def run_discover(wr_id: int, novel_title: str = "", max_pages: int = 50, source: str = "bookto31", dry_run: bool = False) -> int:
+    """북토끼 작품 메인에서 모든 회차 wr_id 발견 → 큐에 추가.
+
+    dry_run: 첫 페이지만 fetch해서 제목 추출 후 출력하고 종료.
+    """
     from services.bookto31 import extract_chapter_wr_ids_from_index
     from lib.flaresolverr_client import FlareSolverrSession
 
     fs = FlareSolverrSession(rate_limit=False)
     all_chapters = []
     seen = set()
+    title = ""
+
+    # dry_run: 첫 페이지만 fetch해서 제목 추출
+    if dry_run:
+        url = f"https://bookto31.com/bbs/board.php?bo_table=novel&wr_id={wr_id}&spage=1"
+        html = fs.fetch(url)
+        if html:
+            import re as _re
+            title_m = _re.search(r"<title>(.*?)</title>", html)
+            if title_m:
+                title = title_m.group(1).strip()
+                title = _re.sub(r"\s*[-–|]\s*(?:북토끼|bookto31).*", "", title).strip()
+            if not title:
+                og_m = _re.search(r'<meta property="og:title" content="([^"]+)"', html)
+                if og_m:
+                    title = og_m.group(1).strip()
+        print(f"TITLE:{title or novel_title or f'소설 {wr_id}'}")
+        return 0
 
     for spage in range(1, max_pages + 1):
         url = f"https://bookto31.com/bbs/board.php?bo_table=novel&wr_id={wr_id}&spage={spage}"
         html = fs.fetch(url)
+
+        # 첫 페이지에서 제목 추출
+        if spage == 1 and html:
+            import re as _re
+            title_m = _re.search(r"<title>(.*?)</title>", html)
+            if title_m:
+                title = title_m.group(1).strip()
+                title = _re.sub(r"\s*[-–|]\s*(?:북토끼|bookto31).*", "", title).strip()
+            if not title:
+                og_m = _re.search(r'<meta property="og:title" content="([^"]+)"', html)
+                if og_m:
+                    title = og_m.group(1).strip()
         if not html or len(html) < 1000:
             log.info(f"  spage={spage}: 응답 없음, 중단")
             break
@@ -424,13 +457,23 @@ def main():
 
     if cmd == "discover":
         if len(sys.argv) < 3:
-            print("사용법: pipeline.py discover <wr_id> [novel_title] [max_pages] [--source bookto31|newtoki]")
+            print("사용법: pipeline.py discover <wr_id> [novel_title] [max_pages] [--source bookto31|newtoki] [--dry-run]")
             return 1
         wr_id = int(sys.argv[2])
-        title = sys.argv[3] if len(sys.argv) > 3 else ""
-        pages = int(sys.argv[4]) if len(sys.argv) > 4 else 50
         source = _parse_source()
-        run_discover(wr_id, title, pages, source)
+        dry_run = "--dry-run" in sys.argv
+        # title과 max_pages는 --source/--dry-run 이전의 위치 인자
+        title = ""
+        pages = 50
+        positional = [a for a in sys.argv[3:] if not a.startswith("--")]
+        if len(positional) > 0:
+            title = positional[0]
+        if len(positional) > 1:
+            try:
+                pages = int(positional[1])
+            except ValueError:
+                pass
+        run_discover(wr_id, title, pages, source, dry_run)
 
     elif cmd == "collect":
         limit = 0

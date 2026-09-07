@@ -71,33 +71,23 @@ def parse_url(url: str) -> Tuple[Optional[str], Optional[str]]:
 # ============================================================
 
 def extract_title_from_main(source: str, wr_id: str) -> str:
-    """작품 메인 페이지에서 제목 추출."""
-    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    """작품 메인 페이지에서 제목 추출 (subprocess로 pipeline.py discover --dry-run)."""
+    script = str(PIPELINE_SCRIPT)
+    try:
+        result = subprocess.run(
+            ["python3", script, "discover", wr_id, "--dry-run", "--source", source],
+            capture_output=True, text=True, timeout=60,
+        )
+        for line in result.stdout.split("\n"):
+            if line.startswith("TITLE:"):
+                return line.replace("TITLE:", "").strip()
+        return _fetch_title_direct(source, wr_id)
+    except Exception as e:
+        log.warning(f"제목 추출 실패: {e}")
+        return _fetch_title_direct(source, wr_id)
 
-    if source == "bookto31":
-        url = f"https://bookto31.com/bbs/board.php?bo_table=novel&wr_id={wr_id}"
-        from lib.flaresolverr_client import FlareSolverrSession
-        fs = FlareSolverrSession(rate_limit=False)
-        html = fs.fetch(url)
-        if not html:
-            raise HTTPException(status_code=502, detail="bookto31 fetch 실패")
-        # 제목 추출
-        m = re.search(r"<title>(.*?)</title>", html)
-        if m:
-            title = m.group(1).strip()
-            # " - 북토끼" 등 제거
-            title = re.sub(r"\s*[-–|]\s*(?:북토끼|bookto31).*", "", title).strip()
-            return title
-        # og:title 폴백
-        m = re.search(r'<meta property="og:title" content="([^"]+)"', html)
-        if m:
-            return m.group(1).strip()
-        return f"소설 {wr_id}"
 
-    elif source == "newtoki":
-        # toki31은 제목 추출을 위해 Playwright 필요 → 임시 제목
-        return f"소설 {wr_id}"
-
+def _fetch_title_direct(source: str, wr_id: str) -> str:
     return f"소설 {wr_id}"
 
 
@@ -173,8 +163,22 @@ async def start_pipeline(req: StartPipelineRequest):
     # 3. 제목 추출
     title = extract_title_from_main(source, novel_id)
 
-    # 4. pipeline.py discover 실행
+    # 4. pipeline.py discover --dry-run 실행 (제목 추출)
     script = str(PIPELINE_SCRIPT)
+    try:
+        result = subprocess.run(
+            ["python3", script, "discover", novel_id, "--dry-run", "--source", source],
+            capture_output=True, text=True, timeout=60,
+        )
+        # discover --dry-run이 stdout에 "TITLE:..." 출력
+        for line in result.stdout.split("\n"):
+            if line.startswith("TITLE:"):
+                title = line.replace("TITLE:", "").strip()
+                break
+    except Exception as e:
+        log.warning(f"제목 추출 오류: {e}")
+
+    # 5. pipeline.py discover 실행 (실제 큐 등록)
     try:
         result = subprocess.run(
             ["python3", script, "discover", novel_id, title, "50", "--source", source],

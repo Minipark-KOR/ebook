@@ -173,40 +173,44 @@ def get_chapter_detail(wr_id: int) -> Optional[dict]:
             chapter_file = novel_dir / f"{wr_id}.json"
             if not chapter_file.exists() or chapter_file.name in ("meta.json", CHAPTERS_INDEX_FILE):
                 continue
-                try:
-                    with open(chapter_file, "r", encoding="utf-8") as f:
-                        data = json.load(f)
+            try:
+                with open(chapter_file, "r", encoding="utf-8") as f:
+                    data = json.load(f)
 
-                    # 이전/다음 회차 찾기
-                    chapters = sorted(novel_dir.glob("*.json"))
-                    current_idx = None
-                    for idx, ch in enumerate(chapters):
-                        if ch.stem == str(wr_id):
-                            current_idx = idx
-                            break
+                # 이전/다음 회차 찾기 (meta.json, 인덱스 제외)
+                chapters = sorted(
+                    [f for f in novel_dir.glob("*.json")
+                     if f.name not in ("meta.json", CHAPTERS_INDEX_FILE)],
+                    key=lambda f: int(f.stem),
+                )
+                current_idx = None
+                for idx, ch in enumerate(chapters):
+                    if ch.stem == str(wr_id):
+                        current_idx = idx
+                        break
 
-                    prev_chapter = None
-                    next_chapter = None
-                    if current_idx is not None:
-                        if current_idx > 0:
-                            prev_file = chapters[current_idx - 1]
-                            prev_chapter = int(prev_file.stem)
-                        if current_idx < len(chapters) - 1:
-                            next_file = chapters[current_idx + 1]
-                            next_chapter = int(next_file.stem)
+                prev_chapter = None
+                next_chapter = None
+                if current_idx is not None:
+                    if current_idx > 0:
+                        prev_file = chapters[current_idx - 1]
+                        prev_chapter = int(prev_file.stem)
+                    if current_idx < len(chapters) - 1:
+                        next_file = chapters[current_idx + 1]
+                        next_chapter = int(next_file.stem)
 
-                    content = data.get("content", "")
-                    images = extract_images_from_content(content)
+                content = data.get("content", "")
+                images = extract_images_from_content(content)
 
-                    return {
-                        "wr_id": data.get("wr_id"),
-                        "chapter": data.get("chapter"),
-                        "title": data.get("title"),
-                        "content": content,
-                        "images": images,
-                        "prevChapter": prev_chapter,
-                        "nextChapter": next_chapter,
-                    }
-                except (json.JSONDecodeError, KeyError):
-                    continue
+                return {
+                    "wr_id": data.get("wr_id"),
+                    "chapter": data.get("chapter"),
+                    "title": data.get("title"),
+                    "content": content,
+                    "images": images,
+                    "prevChapter": prev_chapter,
+                    "nextChapter": next_chapter,
+                }
+            except (json.JSONDecodeError, KeyError):
+                continue
     return None

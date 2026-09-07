@@ -25,7 +25,7 @@ import time
 import logging
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional, Tuple
 
 # ebooklib 백엔드 경로 추가
 sys.path.insert(0, '/opt/workspace/ebooklib/apps/backend')
@@ -142,18 +142,13 @@ def release_lock() -> None:
         pass
 
 
-def fetch_with_retry(wr_id: int, max_retries: int = 3, target_chapter: int = None) -> tuple[bool, str, str]:
+def fetch_with_retry(wr_id: int, max_retries: int = 3, target_chapter: int = None) -> tuple[bool, str, str, Optional[int]]:
     """북토끼에서 챕터 본문 가져오기 (재시도 포함).
 
     작품 메인 페이지인 경우 자동으로 회차 wr_id를 찾아 본문 추출.
 
-    Args:
-        wr_id: 북토끼 wr_id
-        max_retries: 재시도 횟수
-        target_chapter: 작품 메인일 때 찾을 회차 번호 (None이면 1화)
-
     Returns:
-        (성공여부, 본문, 에러메시지)
+        (성공여부, 본문, 에러메시지, 회차번호)
     """
     from services.bookto31 import (
         fetch_chapter, parse_chapter_body, is_novel_index_page,
@@ -172,30 +167,29 @@ def fetch_with_retry(wr_id: int, max_retries: int = 3, target_chapter: int = Non
 
             # 작품 메인 페이지인 경우 - 회차 wr_id 찾아서 본문 추출
             if is_novel_index_page(html):
-                # 메타데이터 추출
                 meta = parse_novel_meta_safe(html)
                 log.info(f"  작품 메인 페이지 감지: {meta.get('title', '?')}")
-                # 회차 목록 추출
                 chapter_list = extract_chapter_wr_ids_from_index(html)
                 log.info(f"  작품 메인에서 {len(chapter_list)}개 회차 발견")
-                # target_chapter 찾기
                 if target_chapter is None:
                     target_chapter = 1
                 actual_wr_id = find_chapter_wr_id(html, wr_id, target_chapter)
                 if not actual_wr_id:
-                    return False, "", f"회차 {target_chapter}를 작품 메인에서 찾을 수 없음"
+                    return False, "", f"회차 {target_chapter}를 작품 메인에서 찾을 수 없음", None
                 log.info(f"  {target_chapter}화 wr_id={actual_wr_id}로 다시 fetch")
-                # 찾은 wr_id로 다시 fetch (rate_limit 추가 안 됨, 같은 URL이 아니므로)
                 html = fetch_chapter(actual_wr_id)
                 if not html:
-                    return False, "", f"회차 fetch 실패"
+                    return False, "", f"회차 fetch 실패", None
 
             if not html:
                 continue
 
+            # 회차 번호 추출: HTML <title>에서 "제목 - N화" 패턴
+            chapter_num = _extract_chapter_num_from_html(html)
+
             body = parse_chapter_body(html)
             if body and len(body) > 100:
-                return True, body, ""
+                return True, body, "", chapter_num
             else:
                 log.warning(f"  본문 파싱 실패 (len={len(body) if body else 0})")
                 if attempt < max_retries:
@@ -206,7 +200,23 @@ def fetch_with_retry(wr_id: int, max_retries: int = 3, target_chapter: int = Non
             if attempt < max_retries:
                 time.sleep(URL_RETRY_DELAY_SEC)
 
-    return False, "", f"{max_retries}회 시도 후 실패"
+    return False, "", f"{max_retries}회 시도 후 실패", None
+
+
+def _extract_chapter_num_from_html(html: str) -> Optional[int]:
+    """HTML <title>에서 회차 번호 추출.
+
+    bookto31 제목 형식: "아포칼립스의 고인물 - 1화" 또는 "오늘만 사는 기사 - 839화"
+    """
+    import re
+    m = re.search(r'<title>(.*?)\s*-\s*(\d+)\s*(?:화|편|장)', html)
+    if m:
+        return int(m.group(2))
+    # og:title 폴백
+    m = re.search(r'<meta property="og:title" content="([^"]*?\s*-\s*(\d+)\s*(?:화|편|장))"', html)
+    if m:
+        return int(m.group(2))
+    return None
 
 
 def parse_novel_meta_safe(html: str) -> Dict:
@@ -253,12 +263,15 @@ def _check_bookto31_alive() -> bool:
     return _BOOKTO31_LAST_OK
 
 
-def save_chapter(wr_id: int, novel_title: str, body: str) -> bool:
+def save_chapter(wr_id: int, novel_title: str, body: str, chapter_num: int = None) -> bool:
     """챕터 본문을 lib.storage로 저장 + Neon DB/Vercel 갱신."""
     from lib.storage import save_chapter as _save, get_novel_dir, update_meta_from_namu
 
     # lib.storage로 JSON 저장 + meta.json 갱신
-    if not _save(novel_title, wr_id, body, source="bookto31"):
+    save_kwargs = {"source": "bookto31"}
+    if chapter_num is not None:
+        save_kwargs["chapter_num"] = chapter_num
+    if not _save(novel_title, wr_id, body, **save_kwargs):
         log.error(f"  ✗ 챕터 저장 실패: wr_id={wr_id}")
         return False
 
@@ -401,14 +414,17 @@ def process_queue() -> dict:
         log.info(f"\n=== 처리 [{i+1}/{len(queue)}]: wr_id={wr_id} ({novel_title}) ===")
 
         # 챕터 가져오기 (재시도 포함)
-        success, body, error = fetch_with_retry(wr_id)
+        success, body, error, chapter_num = fetch_with_retry(wr_id)
         if success:
             # DB 저장
-            if save_chapter(wr_id, novel_title, body):
+            if save_chapter(wr_id, novel_title, body, chapter_num=chapter_num):
                 processed += 1
                 log.info(f"  ✓ wr_id={wr_id} 처리 완료")
             else:
                 errors.append({"wr_id": wr_id, "error": "DB 저장 실패"})
+                log.warning(f"  ✗ wr_id={wr_id} 저장 실패 (재시도 {item.get('attempts', 0) + 1}/5)")
+                item['attempts'] = item.get('attempts', 0) + 1
+                item['last_error'] = error
         else:
             errors.append({"wr_id": wr_id, "error": error})
             # 재시도 카운트 증가
@@ -419,16 +435,20 @@ def process_queue() -> dict:
             else:
                 log.warning(f"  ✗ wr_id={wr_id} 실패 (시도 {item['attempts']}/5)")
 
+        # 즉시 큐 저장: 성공한 항목 제거, 실패+재시도 가능만 남김
+        queue = [q for q in queue if not (
+            q['wr_id'] == wr_id and (
+                success or q.get('attempts', 0) >= 5
+            )
+        )]
+        save_queue(queue)
+
         # 다음 챕터 전 안전 지연 (마지막 챕터는 생략)
-        if i < len(queue) - 1:
+        if queue:  # 아직 할 일이 남았으면
             log.info(f"  {CHAPTER_DELAY_SEC}초 안전 대기...")
             time.sleep(CHAPTER_DELAY_SEC)
-
-    # 실패+재시도 가능한 챕터만 큐에 남김 (성공한 챕터는 제거)
-    remaining = [item for item in queue if any(
-        e['wr_id'] == item['wr_id'] for e in errors
-    ) and item.get('attempts', 0) < 5]
-    save_queue(remaining)
+        else:
+            break
 
     return {"processed": processed, "errors": errors, "remaining": len(remaining)}
 

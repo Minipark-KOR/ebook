@@ -4,13 +4,14 @@
 
 ## 시스템 개요
 
-ebooklib은 한국 웹소설을 자동으로 수집 → DB 저장 → EPUB으로 묶어 → 웹에서 읽고 다운로드할 수 있게 하는 **모노레포 시스템**입니다.
+ebooklib은 한국 웹소설을 자동으로 수집 → JSON 저장 → EPUB으로 묶어 → 웹에서 읽고 다운로드할 수 있게 하는 **모노레포 시스템**입니다.
 
 ### 핵심 기능
 1. **수집**: Cloudflare 보호 사이트(북토끼/bookto31.com, 뉴토끼/toki31.com)에서 챕터 본문 크롤링
 2. **저장**: 챕터를 JSON 파일로 `/opt/ai_data/flaresolverr/novels/` 에 저장
-3. **읽기**: Next.js 프론트엔드에서 챕터 단위로 표시
+3. **읽기**: Next.js 프론트엔드에서 챕터 단위로 표시 (ISR로 CDN 캐시)
 4. **EPUB**: 전체 소설을 하나의 EPUB 파일로 묶어서 다운로드 제공 (한글 폰트 임베드)
+5. **자동화**: Admin 페이지에서 URL 입력 → 파이프라인 자동 실행
 
 ### 비기능 요구사항
 - **봇 탐지 회피**: Cloudflare Turnstile을 우회하면서 합법적인 사용자처럼 행동
@@ -26,72 +27,89 @@ ebooklib은 한국 웹소설을 자동으로 수집 → DB 저장 → EPUB으로
 ┌─────────────────────────────────────────────────────────────────┐
 │                       사용자 브라우저                                │
 │  https://miniebook.vercel.app (Vercel CDN)                        │
-│  - 소설 목록 / 회차 목록 / 회차 읽기 / EPUB 다운로드                  │
+│  - 소설 목록 / 회차 목록 / 회차 읽기 / EPUB 다운로드 / Admin          │
 └─────────────────────────────────────────────────────────────────┘
             │                              ▲
             │ HTTPS                       │ HTTPS (HTML/EPUB)
             ▼                              │
 ┌─────────────────────────────────────────────────────────────────┐
-│                     Vercel CDN / Cloudflare                       │
-│  /api/* → FastAPI Python Serverless Functions                    │
-│  /*     → Next.js Static Build                                  │
+│                    Vercel CDN (Next.js ISR)                      │
+│  /            → 정적 HTML (5분 ISR 갱신, CDN 0ms)                 │
+│  /novel/[id]  → ISR 서버 컴포넌트 (CDN 0ms)                       │
+│  /admin       → 파이프라인 관리 (URL 입력 → 시작)                  │
+│  /api/*       → catch-all 프록시 → devforge                      │
 └─────────────────────────────────────────────────────────────────┘
             │
+            │ HTTPS (Caddy → nip.io)
             ▼
 ┌─────────────────────────────────────────────────────────────────┐
-│                    FastAPI Backend (Vercel)                      │
-│  apps/backend/main.py                                           │
-│  - routers/novels.py    : /api/novels/*                         │
-│  - routers/chapters.py  : /api/novels/{id}/chapters, /api/chapters/{wr_id} │
-│  - routers/metadata.py  : /api/metadata/* (Brave/GoogLe/DuckDuckGo) │
+│                  devforge (Oracle Cloud, 한국)                    │
+│  Caddy (host network, auto-HTTPS)                                 │
+│    └─ FastAPI (127.0.0.1:8089)                                   │
+│        ├─ routers/novels.py    : /api/novels/*                    │
+│        ├─ routers/chapters.py  : /api/chapters/{wr_id}            │
+│        ├─ routers/metadata.py  : /api/metadata/*                  │
+│        └─ routers/pipeline.py  : /api/pipeline/start, /status     │
 │                                                                  │
-│  - services/data.py      : JSON 파일 읽기                         │
-│  - services/epub.py     : EPUB 생성 (한글 4폰트 임베드)            │
-│  - services/bookto31.py : 북토끼 크롤러 (FlareSolverrSession)     │
-│  - services/toki31.py   : 뉴토끼 크롤러 (curl_cffi)               │
-│  - services/metadata.py : 메타데이터 조회                          │
-│                                                                  │
-│  - lib/                  : 공통 레이어                              │
-│    - lib/user_agent.py          : Chrome 헤더 빌더                │
-│    - lib/flaresolverr_client.py : FlareSolverr 세션 관리          │
-│    - lib/curl_session.py        : curl_cffi 세션 팩토리           │
-│    - lib/proxy_session.py       : 한국 주거용 프록시 관리          │
-│    - lib/storage.py             : 챕터 저장/메타 관리              │
-│    - lib/rate_limiter.py        : SQLite rate limiter             │
+│  FlareSolverr (127.0.0.1:8191) - Cloudflare Turnstile 우회        │
+│  Playwright (newtoki AES-GCM 복호화)                              │
 └─────────────────────────────────────────────────────────────────┘
             │
-            │ 파일 읽기 (data.py → glob)
+            │ 파일 읽기 (data.py → 인덱스 캐시)
             ▼
 ┌─────────────────────────────────────────────────────────────────┐
 │              로컬 데이터 스토리지 (/opt/ai_data/)                  │
 │  /opt/ai_data/flaresolverr/novels/{소설명}/                       │
-│      ├── meta.json     (소설 메타데이터)                             │
-│      ├── {wr_id}.json  (챕터별 본문 - 557개+ 파일)                  │
-│      └── episode_ids.json                                       │
-│  /opt/ai_data/flaresolverr/rate_limiter.db                      │
+│      ├── meta.json              (소설 메타데이터)                  │
+│      ├── {wr_id}.json           (챕터별 본문 - 파일)               │
+│      └── _chapters_index.json   (회차 목록 인덱스 캐시)            │
+│  /opt/ai_data/flaresolverr/rate_limiter.db                       │
 │      (URL별 마지막 요청 시각 기록)                                  │
+│  /opt/ai_data/flaresolverr/ebook_watcher/                        │
+│      ├── queue.json             (수집 큐)                         │
+│      └── pipeline_output.log    (파이프라인 로그)                  │
 └─────────────────────────────────────────────────────────────────┘
+```
 
-                  ▲                  ▲                  ▲
-                  │                  │                  │
-                  │ FlareSolverr 우회 │                  │
-                  │ (FlareSolverr API)                  │
-                  │                  │                  │
-┌──────────────────────────┐  ┌────────────────┐  ┌───────────────┐
-│  bookto31.com (북토끼)      │  │ toki31.com     │  │ miniebook.     │
-│  - Cloudflare Turnstile  │  │ - CloudFront    │  │ vercel.app     │
-│  - GNUBOARD5 + APMS 테마  │  │ - Next.js       │  │ (자체 DB)       │
-│  - 557회차 데이터 소스     │  │ - 일부 데이터  │  │ 553챕터       │
-└──────────────────────────┘  └────────────────┘  └───────────────┘
-            ▲
-            │ (FlareSolverr가 challenge 풀어서 우회)
-            │
-┌─────────────────────────────────────────────────────────────────┐
-│              FlareSolverr (127.0.0.1:8191)                       │
-│  ARM64 컨테이너 - 헤드리스 브라우저로 challenge 해결                 │
-│  - cf_clearance 쿠키 발급                                       │
-│  - svc.pod 내부 또는 standalone 컨테이너                          │
-└─────────────────────────────────────────────────────────────────┘
+---
+
+## 파이프라인 아키텍처
+
+**단일 `pipeline.py`가 5단계 체인으로 동작**합니다.
+
+```
+[1] discover ──→ [2] collect ──→ [3] enrich ──→ [4] index ──→ [5] revalidate
+   wr_id 발견      source별 fetch   namu.wiki      인덱스 캐시     Vercel ISR
+   → 큐 등록      → JSON 저장      메타데이터      재구축          캐시 갱신
+                    │
+                    └←──────  loop: 반복 ──────┘
+```
+
+### 수집기 분기 (source별 Collector)
+
+큐 아이템의 `source` 필드에 따라 collector 자동 분기:
+
+```python
+COLLECTORS = {
+    "bookto31": _collect_bookto31,  # FlareSolverr + GNUBOARD5 파싱
+    "newtoki":  _collect_newtoki,    # Playwright + DataImpulse + AES-GCM 복호화
+    "toki31":   _collect_newtoki,    # alias
+}
+```
+
+### 파이프라인 시작 경로
+
+```
+[1] Admin 페이지 (URL 입력)
+        │
+[2] Vercel /api/pipeline/start (catch-all 프록시)
+        │
+[3] devforge FastAPI
+        ├─ 비밀번호 검증
+        ├─ URL 파싱 (bookto31.com → bookto31, toki31.com → newtoki)
+        ├─ discover --dry-run → 제목 자동 추출
+        ├─ discover → wr_id 큐 등록
+        └─ loop 시작 (없으면)
 ```
 
 ---
@@ -101,64 +119,43 @@ ebooklib은 한국 웹소설을 자동으로 수집 → DB 저장 → EPUB으로
 ```
 /opt/workspace/ebooklib/
 ├── README.md                        # 사용자용 간략 가이드
-├── vercel.json                      # Vercel 빌드/라우팅 설정 (또는 대시보드 설정)
 ├── docs/                            # ← 이 문서들이 있는 곳
-│   ├── 00-ARCHITECTURE.md           # 시스템 전체 (현재 문서)
-│   ├── 01-DATA-PIPELINE.md          # 데이터 흐름
-│   ├── 02-BOT-BYPASS.md             # 봇 탐지 우회 전략
-│   ├── 03-EPUB-GENERATION.md        # EPUB 생성
-│   ├── 04-API-REFERENCE.md          # REST API 명세
-│   ├── 05-DEPLOYMENT.md             # 배포 가이드
-│   ├── 06-MAINTENANCE.md            # 유지보수 작업
-│   ├── 07-AUTOMATION.md             # 자동화 시스템
-│   ├── 08-TOKI31-ANALYSIS.md        # 토끼31 분석
-│   └── 09-REFACTORING-PLAN.md       # 리팩터링 계획 (완료)
-│
 ├── apps/
 │   ├── backend/                     # FastAPI Python 서버
 │   │   ├── main.py                  # 엔트리포인트 (라우터 등록)
-│   │   ├── requirements.txt
-│   │   ├── .env                     # 환경변수 (CORS_ORIGINS 등)
 │   │   ├── routers/                 # API 엔드포인트 정의
 │   │   │   ├── novels.py
 │   │   │   ├── chapters.py
-│   │   │   └── metadata.py
+│   │   │   ├── metadata.py
+│   │   │   └── pipeline.py          # 파이프라인 시작/상태 API
 │   │   ├── services/                # 비즈니스 로직
-│   │   │   ├── data.py              # JSON 파일 읽기
+│   │   │   ├── data.py              # JSON 파일 읽기 (인덱스 캐시)
 │   │   │   ├── epub.py              # EPUB 생성 (한글 4폰트 임베드)
 │   │   │   ├── bookto31.py          # 북토끼 크롤러 (FlareSolverrSession)
-│   │   │   ├── toki31.py            # 뉴토끼 크롤러 (curl_cffi)
 │   │   │   ├── metadata.py          # 메타데이터 검색
 │   │   │   └── metadata_namu.py     # namu.wiki 메타데이터
 │   │   └── lib/                     # 공통 레이어
-│   │       ├── __init__.py
-│   │       ├── user_agent.py        # Chrome 헤더 빌더
 │   │       ├── flaresolverr_client.py # FlareSolverr 세션 관리
-│   │       ├── curl_session.py      # curl_cffi 세션 팩토리
 │   │       ├── storage.py           # 챕터 저장/메타 관리
-│   │       └── rate_limiter.py      # SQLite rate limiter
+│   │       ├── rate_limiter.py      # SQLite rate limiter
+│   │       └── toki31_playwright.py # 뉴토끼 Playwright 추출기
 │   │
 │   ├── frontend/                    # Next.js 16 + React 19
 │   │   ├── app/
-│   │   │   ├── page.tsx             # 라이브러리 메인
+│   │   │   ├── page.tsx             # 라이브러리 메인 (ISR)
+│   │   │   ├── admin/page.tsx       # 파이프라인 관리
 │   │   │   └── novel/
-│   │   │       ├── [id]/page.tsx           # 소설 상세 + 회차 목록 + EPUB 다운로드
-│   │   │       └── [id]/chapter/[wr_id]/page.tsx  # 챕터 읽기
+│   │   │       ├── [id]/page.tsx            # 소설 상세 (ISR)
+│   │   │       └── [id]/chapter/[wr_id]/page.tsx  # 챕터 읽기 (ISR)
 │   │   ├── lib/
 │   │   │   └── api.ts               # fetch 래퍼
-│   │   ├── AGENTS.md / CLAUDE.md    # AI 에이전트용 가이드
 │   │   ├── next.config.ts
 │   │   └── package.json
 │   │
 ├── scripts/
+│   ├── pipeline.py                  # 파이프라인 (discover/collect/enrich/index/revalidate/loop)
 │   ├── json_to_epub.py              # 독립 실행 EPUB 변환기
-│   ├── ebook_watcher/               # 자동 수집 워치독 (큐 기반)
-│   │   ├── watchdog.py              #   15분마다 큐 체크 + 워커 트리거
-│   │   ├── ebook_worker.py          #   북토끼 챕터 자동 수집 (lib.storage 사용)
-│   │   └── ebook_queue.py           #   CLI 큐 관리 (add/list/remove/status)
-│   ├── discover_chapters.py         # 회차 wr_id 자동 발견
-│   ├── dual_metadata_ssot.py        # 문피아/조아라 듀얼 메타데이터
-│   └── bookto31_healthcheck.py      # 북토끼 상태 체크
+│   └── fonts/                       # EPUB 한글 폰트
 ```
 
 ---
@@ -169,119 +166,75 @@ ebooklib은 한국 웹소설을 자동으로 수집 → DB 저장 → EPUB으로
 ┌────────────────────┐
 │ apps/frontend/     │
 │   app/novel/[id]/  │
-│     page.tsx       │
+│     page.tsx (ISR) │
 └─────────┬──────────┘
-          │ GET /api/novels/{id}/epub
+          │ GET /api/novels/{id} (devforge 폴백)
           ▼
 ┌────────────────────┐
-│ routers/novels.py  │ ← FastAPI 라우터
+│ Vercel /api/[...]  │ ← catch-all 프록시 (Neon 미설정 시 devforge 폴백)
 └─────────┬──────────┘
           │
           ▼
 ┌────────────────────┐    ┌─────────────┐
-│ services/epub.py   │◄───┤ services/   │
-│ - build_epub()     │    │   data.py   │
-│ - 4폰트 임베드│    │ - JSON 읽기 │
+│ devforge FastAPI   │    │ services/   │
+│  routers/novels.py │◄───┤   data.py   │
+│                    │    │ - 인덱스 캐시│
 └─────────┬──────────┘    └──────┬──────┘
           │                       │
           ▼                       ▼
 ┌──────────────────────────────────────────┐
 │ /opt/ai_data/flaresolverr/novels/{소설}/   │
-│   - meta.json + {wr_id}.json (557 챕터)   │
+│   - meta.json + {wr_id}.json + 인덱스     │
 └──────────────────────────────────────────┘
 ```
 
 ```
 ┌────────────────────┐
-│ services/bookto31  │
-│ .py - 북토끼 크롤러 │
+│ scripts/pipeline.py│ ← 파이프라인 (collect 단계)
 └─────────┬──────────┘
-          │ HTTP POST /v1
+          │ source 필드 분기
           ▼
-┌────────────────────┐
-│ lib/flaresolverr_  │ ← FlareSolverrSession
-│ client.py          │    (세션 관리 + rate limit)
-└─────────┬──────────┘
-          │
-          ▼
-┌────────────────────┐
-│ FlareSolverr (127  │ ← 헤드리스 브라우저
-│ .0.0.1:8191)       │    (Playwright + Chromium)
-└─────────┬──────────┘
-          │ 자동화된 브라우저 요청
-          ▼
-┌────────────────────┐
-│ bookto31.com       │ ← Cloudflare Turnstile
-│ (북토끼)            │
-└────────────────────┘
-```
-
-```
-┌────────────────────┐
-│ services/toki31.py │
-│ - 뉴토끼 크롤러     │
-└─────────┬──────────┘
-          │
-          ▼
-┌────────────────────┐
-│ lib/proxy_session  │ ← 한국 주거용 프록시
-│ .py                │    MaskProxy + DataImpulse
-└─────────┬──────────┘
-          │
-          ▼
-┌────────────────────┐
-│ lib/curl_session.py│ ← curl_cffi (TLS 위장)
-│ - create_curl_     │    impersonate="chrome131"
-│   session()        │
-└─────────┬──────────┘
-          │
-          ▼
-┌────────────────────┐
-│ toki31.com         │ ← Cloudflare + Next.js
-│ (뉴토끼)            │
-└────────────────────┘
+┌────────────────────┐    ┌──────────────────┐
+│ _collect_bookto31  │    │ _collect_newtoki │
+│ (FlareSolverr)     │    │ (Playwright)     │
+└─────────┬──────────┘    └────────┬─────────┘
+          │                        │
+          ▼                        ▼
+┌────────────────────┐    ┌──────────────────┐
+│ bookto31.com       │    │ toki31.com       │
+│ (Cloudflare)       │    │ (CloudFront+AES) │
+└────────────────────┘    └──────────────────┘
 ```
 
 ---
 
 ## 데이터 라이프사이클
 
-### 1. 수집 단계
+### 1. 수집 단계 (파이프라인)
 
-**3가지 수집 방법** (우선순위 순):
+**파이프라인 진입점**:
+- **Admin 페이지**: `https://miniebook.vercel.app/admin` → URL 입력 → 자동 분기
+- **CLI**: `python3 scripts/pipeline.py all <wr_id> <제목>`
+- **루프**: `python3 scripts/pipeline.py loop <제목>` (상시 실행)
 
-1. **자동화 (ebook-watcher)** - 큐에 추가된 챕터를 시스템이 자동 수집
- - 위치: `/opt/workspace/ebooklib/scripts/ebook_watcher/`
- - 큐: `/opt/ai_data/flaresolverr/ebook_watcher/queue.json`
- - 트리거: `ebook-watcher.timer` @ `*:0/15` (15분마다)
- - 안전장치: 챕터 간 5분 지연, 3회 재시도, 5회 실패 시 큐 제거
- - 자세한 내용: [07-AUTOMATION.md](07-AUTOMATION.md)
-
-2. **API 직접 다운로드** - miniebook.vercel.app API (가장 안정, 봇 탐지 없음)
- - 챕터 메타: `GET /api/novels/{id}/chapters?page=N&limit=20`
- - 챕터 본문: `GET /api/chapters/{wr_id}`
-
-3. **북토끼 직접 크롤링** - FlareSolverr 우회 필요 (rate_limit=True 자동)
- - 챕터 목록: `services.bookto31.fetch_novel_index(wr_id)`
- - 챕터 본문: `services.bookto31.fetch_chapter(wr_id)`
- - 본문 파싱: `services.bookto31.parse_chapter_body(html)`
-
-**권장 워크플로우**:
-- 운영자는 `ebook_queue.py add`로 챕터 추가
-- 시스템이 자동으로 처리 (15분 이내)
-- 실패 시 워치독이 자동 재시작
+**파이프라인 단계**:
+1. **discover** — 작품 메인 페이지에서 모든 wr_id 발견 → 큐 등록
+2. **collect** — 큐에서 하나씩 source별 collector로 fetch → JSON 저장
+3. **enrich** — namu.wiki 메타데이터 보강 (1회만, `namu_attempted` 플래그)
+4. **index** — `_chapters_index.json` 재구축
+5. **revalidate** — Vercel ISR 캐시 갱신
 
 ### 2. 저장 단계
 - 챕터 JSON 파일을 `/opt/ai_data/flaresolverr/novels/{소설명}/`에 저장
-- `data.py`가 glob으로 파일을 읽어서 API 응답으로 제공
+- `data.py`가 인덱스 캐시(`_chapters_index.json`)를 읽어서 API 응답으로 제공
 
 ### 3. 읽기 단계
-- Next.js 페이지가 `/api/novels/{id}/chapters` 호출 → 회차 목록
-- 회차 클릭 → `/api/chapters/{wr_id}` 호출 → 본문 표시
+- Next.js 페이지가 ISR로 정적 생성되어 CDN에서 0ms 서빙
+- 새 챕터 저장 시 워커가 revalidate API 호출 → 해당 페이지만 재생성
 
 ### 4. EPUB 단계
 - 사용자가 "EPUB 다운로드" 클릭 → `/api/novels/{id}/epub`
-- `epub.py`가 DB의 모든 챕터를 모아서 EPUB 바이트 생성 (9MB+, 557화 기준)
+- `epub.py`가 모든 챕터를 모아서 EPUB 바이트 생성
 - **4개 한글 폰트 임베드**: NotoSansKR (제목), RIDIBatang (본문), MaruBuri (인용), Literata (영문)
 
 ---
@@ -293,8 +246,8 @@ ebooklib은 한국 웹소설을 자동으로 수집 → DB 저장 → EPUB으로
 - **FastAPI** - REST API 프레임워크
 - **Pydantic** - 데이터 검증
 - **ebooklib** - EPUB 생성
-- **lxml** - HTML/XML 파싱 (ebooklib 의존성)
 - **requests** - HTTP 클라이언트
+- **Playwright** - 브라우저 자동화 (뉴토끼 우회)
 - **curl_cffi** - TLS fingerprint 위장 (뉴토끼 우회)
 
 ### 프론트엔드
@@ -304,34 +257,33 @@ ebooklib은 한국 웹소설을 자동으로 수집 → DB 저장 → EPUB으로
 - **Tailwind CSS** - 스타일링
 
 ### 인프라
-- **Vercel** - 호스팅 (CDN + Serverless Functions)
+- **Vercel** - 호스팅 (CDN + ISR)
 - **Podman** - 컨테이너 (FlareSolverr)
-- **Podman Quadlet** - systemd 통합
-- **Caddy** - 리버스 프록시 (포트 80/443)
+- **Caddy** - 리버스 프록시 (devforge)
+- **Oracle Cloud** - devforge 서버 (한국 리전)
 
 ### 외부 의존성
-- **FlareSolverr** - 헤드리스 브라우저 (ghcr.io/flaresolverr/flaresolverr:latest) - **북토끼 우회**
-- **curl_cffi** - TLS fingerprint 위장 (chrome131 impersonation) - **뉴토끼 우회**
-- **Cloudflare** - WAF / CDN / Turnstile
+- **FlareSolverr** - 헤드리스 브라우저 - **북토끼 우회**
+- **Playwright** - 브라우저 자동화 - **뉴토끼 우회**
 - **북토끼** (bookto31.com) - **챕터 본문** SSOT
-- **문피아** (munpia.com) - **메타데이터** SSOT (Brave Search로 URL 검색)
-- **조아라** (joara.com) - **메타데이터** SSOT (보조)
-- **namu.wiki** - **표지 이미지** 백업 (devforge 백엔드 경유 image-proxy)
-- **Neon** (PostgreSQL 16) - Vercel 측 직접 조회 DB
-- **4개 한글 폰트** - NotoSansKR (제목), RIDIBatang (본문), MaruBuri (인용), Literata (영문)
+- **뉴토끼** (toki31.com) - **챕터 본문** 대체 소스
+- **namu.wiki** - **메타데이터** + **표지 이미지**
+- **문피아** (munpia.com) - **출판사** 정보
+- **4개 한글 폰트** - NotoSansKR, RIDIBatang, MaruBuri, Literata
 
 ---
 
-## 자동화 계층 (3중 보호)
+## 자동화 계층
 
 ```
-Layer 3: ebook-watcher.timer @ *:0/15     ← 15분마다 워커 트리거
-Layer 2: ebook-watcher.service            ← Restart=always (systemd)
-Layer 1: devforge-watchdog @ 60초마다     ← SERVICE_TARGETS 등록
-Layer 0: systemd Restart=always           ← 워치독도 자동 재시작
+devforge-watchdog @ 60초마다     ← SERVICE_TARGETS: ebook-watcher.service 상태 체크
+ebook-watcher.service            ← Type=simple, Restart=on-failure (30초 간격)
+  └─ pipeline.py loop            ← 상시 실행 (5분 간격 챕터 수집)
 ```
 
-자세한 내용: [07-AUTOMATION.md](07-AUTOMATION.md)
+- **devforge-watchdog**이 60초마다 `ebook-watcher.service`가 살아있는지 체크, 죽으면 재시작
+- **systemd** `Restart=on-failure`로 자체 복구
+- 파이프라인 hang은 로그 갱신 없음으로 판단
 
 ---
 
@@ -342,4 +294,4 @@ Layer 0: systemd Restart=always           ← 워치독도 자동 재시작
 - [04-API-REFERENCE.md](04-API-REFERENCE.md) - API 명세
 - [05-DEPLOYMENT.md](05-DEPLOYMENT.md) - 배포
 - [06-MAINTENANCE.md](06-MAINTENANCE.md) - 유지보수
-- [07-AUTOMATION.md](07-AUTOMATION.md) - 자동화 시스템 (ebook-watcher + watchdog)
+- [07-AUTOMATION.md](07-AUTOMATION.md) - 자동화 시스템

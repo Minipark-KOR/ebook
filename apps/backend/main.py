@@ -15,7 +15,7 @@ from fastapi.staticfiles import StaticFiles
 env_path = Path(__file__).parent / ".env"
 load_dotenv(env_path)
 
-from routers import novels, chapters, metadata
+from routers import novels, chapters, metadata, pipeline
 
 app = FastAPI(
     title="eBook API",
@@ -46,6 +46,7 @@ app.mount("/api/covers", StaticFiles(directory=str(COVERS_DIR)), name="covers")
 app.include_router(novels.router, prefix="/api", tags=["novels"])
 app.include_router(chapters.router, prefix="/api", tags=["chapters"])
 app.include_router(metadata.router, prefix="/api", tags=["metadata"])
+app.include_router(pipeline.router, prefix="/api", tags=["pipeline"])
 
 
 @app.get("/")

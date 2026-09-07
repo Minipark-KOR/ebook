@@ -278,13 +278,17 @@ def save_chapter(wr_id: int, novel_title: str, body: str, chapter_num: int = Non
     novel_id = novel_title.replace(' ', '_').replace('/', '_') if novel_title else f"novel_{wr_id}"
     novel_dir = get_novel_dir(novel_title)
 
-    # 새 소설이면 namu.wiki 메타데이터 보강
+    # 새 소설이면 namu.wiki 메타데이터 보강 (최초 1회만)
     meta_file = novel_dir / 'meta.json'
     if meta_file.exists():
         import json as _json
         with open(meta_file, 'r', encoding='utf-8') as f:
             meta = _json.load(f)
-        if meta.get('author') == '미상':
+        # namu_attempted 플래그가 없고 author가 미상이면 1회만 시도
+        if meta.get('author') == '미상' and not meta.get('namu_attempted'):
+            meta['namu_attempted'] = True
+            with open(meta_file, 'w', encoding='utf-8') as f:
+                _json.dump(meta, f, ensure_ascii=False, indent=2)
             namu_meta = enrich_metadata_from_namu(novel_id, novel_title)
             if namu_meta:
                 update_meta_from_namu(novel_title, namu_meta)

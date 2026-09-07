@@ -39,10 +39,8 @@ function rowToNovel(row: any) {
 
 async function proxyToNeon(req: NextRequest, slug: string[]): Promise<NextResponse> {
   if (!neonPool) {
-    return new NextResponse(
-      JSON.stringify({ detail: 'Neon not configured' }),
-      { status: 503, headers: { 'Content-Type': 'application/json' } }
-    );
+    // Neon 미설정 → devforge 백엔드로 폴백
+    return proxyToDevforge(req, slug);
   }
 
   try {
@@ -212,12 +210,46 @@ export const dynamic = 'force-dynamic';
 
 type Props = { params: Promise<{ slug: string[] }> };
 
+async function proxyToDevforge(req: NextRequest, slug: string[]): Promise<NextResponse> {
+  const path = slug.join('/');
+  const backendUrl = process.env.NEXT_PUBLIC_API_URL || 'https://devforge.152-69-229-246.nip.io';
+  const url = `${backendUrl}/api/${path}${new URL(req.url).search}`;
+
+  const headers: Record<string, string> = {};
+  const origin = req.headers.get('origin');
+  if (origin) headers['Origin'] = origin;
+  const referer = req.headers.get('referer');
+  if (referer) headers['Referer'] = referer;
+
+  try {
+    const res = await fetch(url, {
+      method: req.method,
+      headers,
+      body: ['GET', 'HEAD'].includes(req.method) ? undefined : await req.text(),
+    });
+
+    const contentType = res.headers.get('content-type') || '';
+
+    if (!contentType.includes('application/json')) {
+      const blob = await res.blob();
+      const responseHeaders: Record<string, string> = {};
+      for (const [k, v] of res.headers.entries()) {
+        if (['connection', 'keep-alive', 'transfer-encoding'].includes(k.toLowerCase())) continue;
+        responseHeaders[k] = v;
+      }
+      return new NextResponse(blob, { status: res.status, headers: responseHeaders });
+    }
+
+    const data = await res.json();
+    return NextResponse.json(data, { status: res.status });
+  } catch (e) {
+    return NextResponse.json({ detail: `Backend proxy failed: ${e}` }, { status: 502 });
+  }
+}
+
 async function proxyNovelChapters(req: NextRequest, slug: string[]): Promise<NextResponse> {
   if (!neonPool) {
-    return new NextResponse(
-      JSON.stringify({ detail: 'Neon not configured' }),
-      { status: 503, headers: { 'Content-Type': 'application/json' } }
-    );
+    return proxyToDevforge(req, slug);
   }
 
   try {

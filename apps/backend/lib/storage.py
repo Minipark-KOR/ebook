@@ -89,6 +89,13 @@ def save_chapter(
     # meta.json 갱신
     _update_meta(novel_dir, novel_id, novel_title)
 
+    # 챕터 인덱스 캐시 갱신 (API 성능 최적화)
+    try:
+        from services.data import rebuild_chapters_index
+        rebuild_chapters_index(novel_dir)
+    except Exception:
+        pass  # 인덱스 캐시 실패는 저장 실패와 무관
+
     return True
 
 

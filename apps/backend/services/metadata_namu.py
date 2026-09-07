@@ -161,11 +161,60 @@ def _fetch_binary(url: str, timeout: int = 30) -> Optional[bytes]:
         return None
 
 
+def _validate_cover_image(binary: bytes, url: str = "") -> bool:
+    """표지 이미지 검증.
+
+    namu.wiki 페이지에는 여러 이미지(아이콘, 스크린샷)가 섞여 있음.
+    og:image만 표지로 사용해야 함.
+
+    검증 기준:
+    1. 최소 크기 5KB 이상 (아이콘/썸네일 제외)
+    2. WebP/JPEG/PNG 형식 확인
+    3. 가로 세로 비율 추정 (5:7~1:1 범위, 아이콘 제외)
+    4. URL에 'logo', 'icon', 'favicon' 키워드 제외
+    """
+    if not binary or len(binary) < 5120:  # 5KB 미만 = 아이콘/썸네일
+        return False
+
+    # URL 키워드 검증
+    url_lower = url.lower() if url else ""
+    for keyword in ["logo", "icon", "favicon", "button", "banner", "avatar"]:
+        if keyword in url_lower:
+            return False
+
+    # WebP 시그니처 확인
+    if binary.startswith(b"RIFF") and b"WEBP" in binary[:12]:
+        # WebP 크기 확인 (12~16바이트에 이미지 크기 정보)
+        # 최소 200x200 이상 (아이콘 제외)
+        try:
+            width = int.from_bytes(binary[26:28], "little")
+            height = int.from_bytes(binary[28:30], "little")
+            if width < 200 or height < 200:
+                return False
+            # 정사각형에 가까우면 아이콘/프로필일 가능성
+            ratio = max(width, height) / min(width, height) if min(width, height) > 0 else 0
+            if ratio > 1.0 and ratio < 1.1 and width < 400:
+                return False
+        except Exception:
+            pass  # 크기 추출 실패해도 통과
+        return True
+
+    # JPEG 시그니처
+    if binary.startswith(b"\xff\xd8\xff"):
+        return True
+
+    # PNG 시그니처
+    if binary.startswith(b"\x89PNG"):
+        return True
+
+    return False
+
+
 def download_cover(cover_url: str, save_path: Path, timeout: int = 30) -> bool:
     """표지 이미지 다운로드 후 로컬에 저장.
 
     Args:
-        cover_url: namu.wiki 표지 URL
+        cover_url: namu.wiki 표지 URL (og:image만 신뢰)
         save_path: 저장할 로컬 경로 (.webp, .jpg 등)
         timeout: HTTP 타임아웃
 
@@ -183,8 +232,8 @@ def download_cover(cover_url: str, save_path: Path, timeout: int = 30) -> bool:
     if not binary:
         return False
 
-    # 최소 크기 체크 (1KB 이상)
-    if len(binary) < 1024:
+    # 이미지 검증 (크기, 형식, 비율)
+    if not _validate_cover_image(binary, cover_url):
         return False
 
     # 확장자 결정 (Content-Type 또는 URL)

@@ -72,3 +72,4 @@ apps/frontend/out/
 # TypeScript
 *.tsbuildinfo
 .env*
+.vercel

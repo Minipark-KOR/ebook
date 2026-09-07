@@ -36,10 +36,7 @@ WATCHER_DIR = Path('/opt/ai_data/flaresolverr/ebook_watcher')
 WATCHER_DIR.mkdir(parents=True, exist_ok=True)
 QUEUE_FILE = WATCHER_DIR / 'queue.json'
 STATUS_FILE = WATCHER_DIR / 'status.json'
-PID_FILE = WATCHER_DIR / 'pipeline.pid'
-LOG_FILE = WATCHER_DIR / 'pipeline_output.log'
 CHAPTER_DELAY_SEC = 300
-HANG_TIMEOUT = 1800  # 30분 이상 로그 없으면 hang으로 간주
 
 # ============================================================
 # 수집기 레지스트리 — source별 collector 분기
@@ -551,135 +548,12 @@ def main():
         except KeyboardInterrupt:
             log.info("루프 중단 (사용자 요청)")
 
-    elif cmd == "watchdog":
-        """파이프라인 루프 감시 — 60초마다 체크, 중복 제거, 행/죽음 재시작.
-
-        systemd timer 또는 devforge-watchdog에 등록하여 60초마다 실행.
-        """
-        run_watchdog()
-
     else:
         print(f"알 수 없는 명령: {cmd}")
         print(__doc__)
         return 1
 
     return 0
-
-
-# ============================================================
-# 워치독 — 파이프라인 감시/복구 (60초 간격)
-# ============================================================
-
-def _pipeline_pids() -> list[int]:
-    """실행 중인 pipeline.py loop 프로세스 PID 목록."""
-    import subprocess as _sp
-    try:
-        r = _sp.run(["pgrep", "-f", "pipeline.py loop"], capture_output=True, text=True, timeout=5)
-        if r.returncode == 0 and r.stdout.strip():
-            return [int(p) for p in r.stdout.strip().split("\n")]
-    except Exception:
-        pass
-    return []
-
-
-def _log_mtime() -> float:
-    """로그 파일의 마지막 수정 시간. 없으면 0."""
-    try:
-        return LOG_FILE.stat().st_mtime
-    except FileNotFoundError:
-        return 0.0
-
-
-def _is_healthy(pid: int) -> bool:
-    """프로세스가 살아있고 최근 10분 내 로그가 갱신됐으면 정상."""
-    import os as _os
-    try:
-        _os.kill(pid, 0)  # kill 0 = 존재 확인
-    except (ProcessLookupError, PermissionError):
-        return False
-
-    # 행 체크: 10분 이상 로그 갱신 없음 = hang
-    if time.time() - _log_mtime() > HANG_TIMEOUT:
-        return False
-
-    return True
-
-
-def _start_loop() -> int:
-    """파이프라인 루프 새로 시작. PID 반환."""
-    import subprocess as _sp
-    LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
-    proc = _sp.Popen(
-        ["python3", __file__, "loop", "--source", "bookto31"],
-        stdout=open(LOG_FILE, "a"),
-        stderr=_sp.STDOUT,
-        preexec_fn=os.setpgrp,
-    )
-    pid = proc.pid
-    PID_FILE.write_text(str(pid))
-    log.warning(f"  → 파이프라인 루프 시작 (PID {pid})")
-    return pid
-
-
-def _kill_pids(pids: list[int]) -> None:
-    """지정된 PID들 강제 종료."""
-    import subprocess as _sp
-    for p in pids:
-        try:
-            _sp.run(["kill", "-9", str(p)], capture_output=True, timeout=5)
-            log.warning(f"  ✗ PID {p} 강제 종료")
-        except Exception:
-            pass
-
-
-def run_watchdog() -> dict:
-    """워치독 메인: 체크 → 중복 제거 → 행/죽음 재시작.
-
-    Returns:
-        {"status": "ok", "running": True/False, "pid": N, "action": "..."}
-    """
-    log.info("=" * 50)
-    log.info("워치독 체크 시작")
-    log.info("=" * 50)
-
-    pids = _pipeline_pids()
-    result = {"running": False, "pid": None, "action": "none"}
-
-    if len(pids) > 1:
-        # 중복 발견: 가장 오래된 PID 유지, 나머지 종료
-        log.warning(f"  ⚠ 중복 파이프라인 발견: {pids}")
-        keep = min(pids)
-        kill = [p for p in pids if p != keep]
-        _kill_pids(kill)
-        pids = [keep]
-        result["action"] = f"duplicate_killed:{kill}"
-
-    if pids and _is_healthy(pids[0]):
-        result["running"] = True
-        result["pid"] = pids[0]
-        result["action"] = "ok"
-        log.info(f"  ✓ 파이프라인 정상 (PID {pids[0]})")
-    else:
-        if pids:
-            log.warning(f"  ⚠ 파이프라인 hang/죽음 (PID {pids[0]})")
-            _kill_pids(pids)
-            result["action"] = "killed_and_restarted"
-
-        # 재시작
-        new_pid = _start_loop()
-        result["running"] = True
-        result["pid"] = new_pid
-        if "action" not in result or result["action"] == "none":
-            result["action"] = "started"
-
-    # 큐 상태
-    queue = _load_queue()
-    result["queue"] = len(queue)
-    result["timestamp"] = datetime.now(timezone.utc).isoformat()
-
-    log.info(f"  큐: {result['queue']}개 | PID: {result['pid']} | 상태: {result['action']}")
-    log.info("=" * 50)
-    return result
 
 
 if __name__ == "__main__":

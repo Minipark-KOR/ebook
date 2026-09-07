@@ -1,9 +1,15 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import Link from "next/link";
 
+const ADMIN_PASSWORD = "0107460416";
+
 export default function AdminPage() {
+  const [authenticated, setAuthenticated] = useState(false);
+  const [loginPw, setLoginPw] = useState("");
+  const [loginError, setLoginError] = useState(false);
+
   const [password, setPassword] = useState("");
   const [url, setUrl] = useState("");
   const [loading, setLoading] = useState(false);
@@ -17,6 +23,24 @@ export default function AdminPage() {
     loop_running?: boolean;
     detail?: string;
   } | null>(null);
+
+  // Check sessionStorage on mount
+  useEffect(() => {
+    if (sessionStorage.getItem("admin_auth") === "1") {
+      setAuthenticated(true);
+    }
+  }, []);
+
+  function handleLogin(e: React.FormEvent) {
+    e.preventDefault();
+    if (loginPw === ADMIN_PASSWORD) {
+      setAuthenticated(true);
+      setLoginError(false);
+      sessionStorage.setItem("admin_auth", "1");
+    } else {
+      setLoginError(true);
+    }
+  }
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -46,12 +70,62 @@ export default function AdminPage() {
     }
   }
 
+  // 로그인 화면
+  if (!authenticated) {
+    return (
+      <div className="min-h-screen bg-gray-50 dark:bg-gray-900 flex items-center justify-center">
+        <div className="max-w-sm w-full mx-4">
+          <Link href="/" className="text-blue-600 dark:text-blue-400 hover:underline mb-6 inline-block">
+            ← 라이브러리로 돌아가기
+          </Link>
+          <h1 className="text-2xl font-bold text-gray-900 dark:text-white mb-6">
+            관리자 로그인
+          </h1>
+          <form onSubmit={handleLogin} className="space-y-4 bg-white dark:bg-gray-800 rounded-lg shadow p-6">
+            <div>
+              <label htmlFor="loginPw" className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                비밀번호
+              </label>
+              <input
+                id="loginPw"
+                type="password"
+                value={loginPw}
+                onChange={(e) => { setLoginPw(e.target.value); setLoginError(false); }}
+                placeholder="관리자 비밀번호를 입력하세요"
+                className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+                autoFocus
+              />
+              {loginError && (
+                <p className="text-sm text-red-500 mt-1">비밀번호가 일치하지 않습니다</p>
+              )}
+            </div>
+            <button
+              type="submit"
+              className="w-full px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700"
+            >
+              로그인
+            </button>
+          </form>
+        </div>
+      </div>
+    );
+  }
+
+  // 관리자 페이지
   return (
     <div className="min-h-screen bg-gray-50 dark:bg-gray-900 py-8">
       <div className="max-w-2xl mx-auto px-4">
-        <Link href="/" className="text-blue-600 dark:text-blue-400 hover:underline mb-6 inline-block">
-          ← 라이브러리로 돌아가기
-        </Link>
+        <div className="flex justify-between items-center mb-6">
+          <Link href="/" className="text-blue-600 dark:text-blue-400 hover:underline">
+            ← 라이브러리로 돌아가기
+          </Link>
+          <button
+            onClick={() => { setAuthenticated(false); sessionStorage.removeItem("admin_auth"); }}
+            className="text-sm text-gray-500 dark:text-gray-400 hover:underline"
+          >
+            로그아웃
+          </button>
+        </div>
 
         <h1 className="text-3xl font-bold text-gray-900 dark:text-white mb-2">
           파이프라인 관리

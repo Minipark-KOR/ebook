@@ -5,12 +5,13 @@
 한 단계가 실패해도 다음 단계에 영향 없음.
 
 사용법:
-  python3 scripts/pipeline.py discover <wr_id> [novel_title] [max_pages]
-  python3 scripts/pipeline.py collect [--limit N]
+  python3 scripts/pipeline.py discover <wr_id> [novel_title] [max_pages] [--source bookto31|newtoki]
+  python3 scripts/pipeline.py collect [--limit N] [--source bookto31|newtoki]
   python3 scripts/pipeline.py enrich [novel_id]
   python3 scripts/pipeline.py index [novel_id]
   python3 scripts/pipeline.py revalidate [novel_id]
-  python3 scripts/pipeline.py all <wr_id> [novel_title]  # 전체 체인 실행
+  python3 scripts/pipeline.py all <wr_id> [novel_title] [--source bookto31|newtoki]
+  python3 scripts/pipeline.py loop <novel_title> [--source bookto31|newtoki]  # 자동 루프
 """
 
 import json
@@ -18,9 +19,10 @@ import os
 import sys
 import time
 import logging
+import asyncio
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Callable
 
 sys.path.insert(0, '/opt/workspace/ebooklib/apps/backend')
 
@@ -36,9 +38,57 @@ QUEUE_FILE = WATCHER_DIR / 'queue.json'
 STATUS_FILE = WATCHER_DIR / 'status.json'
 CHAPTER_DELAY_SEC = 300
 
+# ============================================================
+# 수집기 레지스트리 — source별 collector 분기
+# ============================================================
+
+def _collect_bookto31(wr_id: int, item: dict) -> tuple[bool, str, str, Optional[int]]:
+    """bookto31 수집기: FlareSolverr + GNUBOARD5 본문 파싱."""
+    from services.bookto31 import fetch_chapter, parse_chapter_body
+    html = fetch_chapter(wr_id)
+    if not html:
+        return False, "", "fetch 실패", None
+    body = parse_chapter_body(html)
+    if not body or len(body) < 100:
+        return False, body, f"본문 부족 ({len(body)} chars)", None
+    chapter_num = _extract_chapter_from_html(html)
+    return True, body, "", chapter_num
+
+
+def _collect_newtoki(wr_id: int, item: dict) -> tuple[bool, str, str, Optional[int]]:
+    """newtoki 수집기: Playwright + DataImpulse + AES-GCM 복호화."""
+    from lib.toki31_playwright import fetch_chapter_content_full
+    novel_id = item.get('novel_ref', '')
+    if not novel_id:
+        return False, "", "novel_ref 필요 (newtoki는 novel_id+episode_id 필요)", None
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    try:
+        result = loop.run_until_complete(fetch_chapter_content_full(novel_id, wr_id))
+        return True, result, "", None
+    except Exception as e:
+        return False, "", f"newtoki fetch 실패: {e}", None
+    finally:
+        loop.close()
+
+
+COLLECTORS: dict[str, Callable] = {
+    "bookto31": _collect_bookto31,
+    "newtoki": _collect_newtoki,
+    "toki31": _collect_newtoki,  # alias
+}
+
+
+def _parse_source() -> str:
+    """CLI 인자에서 --source 추출."""
+    for i, arg in enumerate(sys.argv):
+        if arg == "--source" and i + 1 < len(sys.argv):
+            return sys.argv[i + 1]
+    return "bookto31"
+
 # === 1단계: DISCOVER — wr_id 발견 → 큐에 추가 ===
 
-def run_discover(wr_id: int, novel_title: str = "", max_pages: int = 50) -> int:
+def run_discover(wr_id: int, novel_title: str = "", max_pages: int = 50, source: str = "bookto31") -> int:
     """북토끼 작품 메인에서 모든 회차 wr_id 발견 → 큐에 추가."""
     from services.bookto31 import extract_chapter_wr_ids_from_index
     from lib.flaresolverr_client import FlareSolverrSession
@@ -79,6 +129,7 @@ def run_discover(wr_id: int, novel_title: str = "", max_pages: int = 50) -> int:
                 "wr_id": ch_wr_id,
                 "novel_title": novel_title,
                 "chapter": chapter,
+                "source": source,  # ← source 필드
                 "priority": 1 if chapter >= 800 else 5,
                 "added_at": datetime.now(timezone.utc).isoformat(),
                 "attempts": 0,
@@ -88,19 +139,25 @@ def run_discover(wr_id: int, novel_title: str = "", max_pages: int = 50) -> int:
             added += 1
 
     _save_queue(queue)
-    log.info(f"discover 완료: {added}개 추가 (총 {len(all_chapters)}개 발견)")
+    log.info(f"discover 완료: {added}개 추가 (총 {len(all_chapters)}개 발견, source={source})")
     return added
 
 
 # === 2단계: COLLECT — 큐 소비 → JSON 저장 ===
 
-def run_collect(limit: int = 0) -> dict:
-    """큐에서 wr_id를 하나씩 꺼내 fetch → JSON 저장.
+def run_collect(limit: int = 0, source_filter: str = "") -> dict:
+    """큐에서 wr_id를 하나씩 꺼내 source별 collector로 fetch → JSON 저장.
     limit: 최대 처리할 챕터 수 (0=무제한)
+    source_filter: 특정 source만 처리 (빈 문자열=전체)
     """
-    from services.bookto31 import fetch_chapter, parse_chapter_body
-
     queue = _load_queue()
+    if not queue:
+        return {"processed": 0, "errors": [], "remaining": 0}
+
+    # source 필터
+    if source_filter:
+        queue = [item for item in queue if item.get('source', 'bookto31') == source_filter]
+
     if not queue:
         return {"processed": 0, "errors": [], "remaining": 0}
 
@@ -112,24 +169,29 @@ def run_collect(limit: int = 0) -> dict:
         item = queue[i]
         wr_id = item['wr_id']
         novel_title = item.get('novel_title', '')
+        source = item.get('source', 'bookto31')
         item['attempts'] = item.get('attempts', 0) + 1
 
-        log.info(f"[{i+1}/{len(queue)}] wr_id={wr_id} ({novel_title}) 시도 {item['attempts']}/3")
+        log.info(f"[{i+1}/{len(queue)}] wr_id={wr_id} ({novel_title}) source={source} 시도 {item['attempts']}/3")
 
-        # collect: HTML fetch → 본문 추출
-        success, body = False, ""
+        # collector 선택 (source별 분기)
+        collector = COLLECTORS.get(source)
+        if not collector:
+            log.warning(f"  ✗ 알 수 없는 source: {source}")
+            errors.append({"wr_id": wr_id, "error": f"Unknown source: {source}"})
+            queue = [q for q in queue if q['wr_id'] != wr_id]
+            continue
+
+        # 3회 재시도
+        success, body, error_msg, chapter_num = False, "", "", None
         for attempt in range(3):
             try:
-                html = fetch_chapter(wr_id)
-                if not html:
-                    time.sleep(2)
-                    continue
-                body = parse_chapter_body(html)
-                if body and len(body) > 100:
-                    success = True
+                success, body, error_msg, chapter_num = collector(wr_id, item)
+                if success:
                     break
             except Exception as e:
-                log.warning(f"  fetch 실패: {e}")
+                error_msg = f"{type(e).__name__}: {e}"
+                log.warning(f"  fetch 실패 ({attempt+1}/3): {error_msg}")
                 time.sleep(2)
 
         if not success:
@@ -141,8 +203,8 @@ def run_collect(limit: int = 0) -> dict:
             continue
 
         # 저장 (enrich/index 없이 순수 저장)
-        chapter_num = item.get('chapter') or _extract_chapter_from_html(html)
-        _save_chapter_only(novel_title, wr_id, body, chapter_num)
+        chapter_num = item.get('chapter') or chapter_num
+        _save_chapter_only(novel_title, wr_id, body, chapter_num, source)
         log.info(f"  ✓ wr_id={wr_id} 저장 완료 ({len(body)} chars)")
 
         # 큐에서 제거
@@ -150,7 +212,7 @@ def run_collect(limit: int = 0) -> dict:
         processed += 1
 
         # 다음 챕터 전 대기
-        if i < len(queue) - 1 and limit != 1:
+        if len(queue) > 0 and limit != 1:
             log.info(f"  {CHAPTER_DELAY_SEC}초 대기...")
             time.sleep(CHAPTER_DELAY_SEC)
 
@@ -281,11 +343,11 @@ def _save_queue(queue: list) -> None:
         json.dump(queue, f, ensure_ascii=False, indent=2)
 
 
-def _save_chapter_only(novel_title: str, wr_id: int, body: str, chapter_num: Optional[int] = None) -> bool:
+def _save_chapter_only(novel_title: str, wr_id: int, body: str, chapter_num: Optional[int] = None, source: str = "bookto31") -> bool:
     """순수 저장 (enrich/index/revalidate 없이)."""
     from lib.storage import save_chapter as _save
 
-    save_kwargs = {"source": "bookto31"}
+    save_kwargs = {"source": source}
     if chapter_num is not None:
         save_kwargs["chapter_num"] = chapter_num
     return _save(novel_title, wr_id, body, **save_kwargs)
@@ -304,17 +366,17 @@ def _extract_chapter_from_html(html: str) -> Optional[int]:
 
 # === 메인 ===
 
-def run_all(novel_main_wr_id: int, novel_title: str) -> dict:
+def run_all(novel_main_wr_id: int, novel_title: str, source: str = "bookto31") -> dict:
     """전체 파이프라인 실행 (discover → collect → enrich → index → revalidate)."""
     results = {}
 
     log.info("=" * 50)
-    log.info("파이프라인 시작")
+    log.info(f"파이프라인 시작 (source={source})")
     log.info("=" * 50)
 
     # 1. discover
     log.info("\n[1/5] DISCOVER — 회차 발견")
-    added = run_discover(novel_main_wr_id, novel_title)
+    added = run_discover(novel_main_wr_id, novel_title, source=source)
     results['discover'] = added
 
     if added == 0:
@@ -323,7 +385,7 @@ def run_all(novel_main_wr_id: int, novel_title: str) -> dict:
 
     # 2. collect (1개만 먼저 처리해서 enrich용 meta.json 생성)
     log.info("\n[2/5] COLLECT — 1차 수집 (meta.json 생성용)")
-    first = run_collect(limit=1)
+    first = run_collect(limit=1, source_filter=source)
     results['collect_first'] = first
 
     # 3. enrich
@@ -339,7 +401,7 @@ def run_all(novel_main_wr_id: int, novel_title: str) -> dict:
 
     # 5. 나머지 collect
     log.info("\n[5/5] COLLECT — 나머지 수집")
-    rest = run_collect(limit=0)
+    rest = run_collect(limit=0, source_filter=source)
     results['collect_rest'] = rest
 
     # revalidate (마지막)
@@ -362,19 +424,23 @@ def main():
 
     if cmd == "discover":
         if len(sys.argv) < 3:
-            print("사용법: pipeline.py discover <wr_id> [novel_title] [max_pages]")
+            print("사용법: pipeline.py discover <wr_id> [novel_title] [max_pages] [--source bookto31|newtoki]")
             return 1
         wr_id = int(sys.argv[2])
         title = sys.argv[3] if len(sys.argv) > 3 else ""
         pages = int(sys.argv[4]) if len(sys.argv) > 4 else 50
-        run_discover(wr_id, title, pages)
+        source = _parse_source()
+        run_discover(wr_id, title, pages, source)
 
     elif cmd == "collect":
         limit = 0
+        source = ""
         for i, arg in enumerate(sys.argv):
             if arg == "--limit" and i + 1 < len(sys.argv):
                 limit = int(sys.argv[i + 1])
-        run_collect(limit=limit)
+            if arg == "--source" and i + 1 < len(sys.argv):
+                source = sys.argv[i + 1]
+        run_collect(limit=limit, source_filter=source)
 
     elif cmd == "enrich":
         novel_id = sys.argv[2] if len(sys.argv) > 2 else None
@@ -390,17 +456,19 @@ def main():
 
     elif cmd == "all":
         if len(sys.argv) < 4:
-            print("사용법: pipeline.py all <wr_id> <novel_title>")
+            print("사용법: pipeline.py all <wr_id> <novel_title> [--source bookto31|newtoki]")
             return 1
         wr_id = int(sys.argv[2])
         title = sys.argv[3]
-        run_all(wr_id, title)
+        source = _parse_source()
+        run_all(wr_id, title, source)
 
     elif cmd == "loop":
         """collect → index → revalidate 무한 루프 (5분 간격)."""
         novel_id = sys.argv[2] if len(sys.argv) > 2 else None
+        source = _parse_source()
         log.info("=" * 50)
-        log.info("파이프라인 루프 시작 (Ctrl+C로 중단)")
+        log.info(f"파이프라인 루프 시작 (source={source}, Ctrl+C로 중단)")
         log.info("=" * 50)
         cycle = 0
         try:
@@ -408,8 +476,8 @@ def main():
                 cycle += 1
                 log.info(f"\n--- Cycle {cycle} ---")
 
-                # collect (1개씩)
-                result = run_collect(limit=1)
+                # collect (1개씩, source 필터)
+                result = run_collect(limit=1, source_filter=source)
                 if result['processed'] == 0 and result['remaining'] == 0:
                     log.info("큐 비어 있음, 루프 종료")
                     break

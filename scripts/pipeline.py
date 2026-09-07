@@ -39,8 +39,7 @@ STATUS_FILE = WATCHER_DIR / 'status.json'
 PID_FILE = WATCHER_DIR / 'pipeline.pid'
 LOG_FILE = WATCHER_DIR / 'pipeline_output.log'
 CHAPTER_DELAY_SEC = 300
-WATCHDOG_INTERVAL = 60  # 60초마다 체크
-HANG_TIMEOUT = 600  # 10분 이상 로그 없으면 hang으로 간주
+HANG_TIMEOUT = 1800  # 30분 이상 로그 없으면 hang으로 간주
 
 # ============================================================
 # 수집기 레지스트리 — source별 collector 분기

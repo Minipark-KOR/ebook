@@ -225,17 +225,32 @@ def get_novel_status() -> list[dict]:
                     continue
                 saved += 1
             title = meta.get("title") or novel_dir.name.replace("_", " ")
-            total = meta.get("totalChapters") or saved
             status = meta.get("status") or "unknown"
             completed = status == "완결"
             is_serial = status in ("연재중", "연재") or not completed
+            queued = title in queued_titles
+            # totalChapters가 부정확(1 등)하거나, queue에 회차가 있으면
+            # 실제 대상 회차 수 = 저장된 수 + 큐 대기 수로 계산
+            meta_total = meta.get("totalChapters") or 0
+            if queued:
+                # queue에 있는 이 작품 회차 수
+                q_count = 0
+                if QUEUE_FILE.exists():
+                    try:
+                        with open(QUEUE_FILE, encoding="utf-8") as f:
+                            q_count = sum(1 for it in json.load(f) if it.get("novel_title") == title)
+                    except Exception:
+                        pass
+                total = saved + q_count
+            else:
+                total = meta_total if meta_total >= saved else saved
             novels.append({
                 "id": novel_dir.name,
                 "title": title,
                 "saved": saved,
                 "total": total,
                 "status": status,
-                "queued": title in queued_titles,
+                "queued": queued,
                 "serializing": is_serial,
                 "completed": completed,
             })

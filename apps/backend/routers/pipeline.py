@@ -184,6 +184,61 @@ def get_queue_stats() -> dict:
         return {"total": 0, "by_source": {}, "next_item": None}
 
 
+NOVELS_DIR = Path("/opt/ai_data/flaresolverr/novels")
+
+
+def get_novel_status() -> list[dict]:
+    """모든 소설의 저장 상태 + 완료 여부 목록.
+
+    완료 판정: queue에 해당 작품이 남아있지 않고, 저장된 챕터가 0보다 크면 완료.
+    (totalChapters가 수집 중에는 부정확하므로 queue 잔여 여부로 판단)
+    """
+    novels = []
+    try:
+        if not NOVELS_DIR.exists():
+            return novels
+        # queue에 남아있는 작품명 목록
+        queued_titles = set()
+        if QUEUE_FILE.exists():
+            try:
+                with open(QUEUE_FILE, encoding="utf-8") as f:
+                    for item in json.load(f):
+                        if item.get("novel_title"):
+                            queued_titles.add(item["novel_title"])
+            except Exception:
+                pass
+        for novel_dir in sorted(NOVELS_DIR.iterdir()):
+            if not novel_dir.is_dir():
+                continue
+            meta_file = novel_dir / "meta.json"
+            meta = {}
+            if meta_file.exists():
+                try:
+                    with open(meta_file, encoding="utf-8") as f:
+                        meta = json.load(f)
+                except Exception:
+                    meta = {}
+            # 저장된 챕터 수 (meta.json, 인덱스 캐시 제외)
+            saved = 0
+            for f in novel_dir.glob("*.json"):
+                if f.name in ("meta.json", "_chapters_index.json"):
+                    continue
+                saved += 1
+            title = meta.get("title") or novel_dir.name.replace("_", " ")
+            total = meta.get("totalChapters") or saved
+            novels.append({
+                "id": novel_dir.name,
+                "title": title,
+                "saved": saved,
+                "total": total,
+                "queued": title in queued_titles,
+                "completed": saved > 0 and title not in queued_titles,
+            })
+    except Exception as e:
+        log.warning(f"novel status 조회 실패: {e}")
+    return novels
+
+
 def get_progress() -> dict:
     """pipeline.py가 status.json에 기록한 진행 상황 조회."""
     status_file = WATCHER_DIR / "status.json"
@@ -281,6 +336,7 @@ async def pipeline_status():
         "loop_running": is_loop_running(),
         "queue": get_queue_stats(),
         "progress": get_progress(),
+        "novels": get_novel_status(),
         "current_job": current_job,
         "jobs": jobs,
     }

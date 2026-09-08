@@ -70,6 +70,14 @@ export default function AdminPage() {
         remaining?: number;
       };
     };
+    novels?: Array<{
+      id: string;
+      title: string;
+      saved: number;
+      total: number;
+      queued: boolean;
+      completed: boolean;
+    }>;
   } | null>(null);
   // Check sessionStorage on mount
   useEffect(() => {
@@ -411,6 +419,53 @@ export default function AdminPage() {
           </div>
             );
           })()
+        )}
+
+        {/* 소설 목록 */}
+        {pipelineStatus?.novels && pipelineStatus.novels.length > 0 && (
+          <div className="mt-8 bg-white dark:bg-gray-800 rounded-lg shadow p-6">
+            <h2 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">
+              소설 목록
+            </h2>
+            <div className="space-y-2">
+              {pipelineStatus.novels.map((novel) => {
+                const pct = novel.total > 0
+                  ? Math.min(100, Math.round((novel.saved / novel.total) * 100))
+                  : novel.completed ? 100 : 0;
+                const statusLabel = novel.queued ? "수집 중" : novel.completed ? "완료" : "대기";
+                const statusClass = novel.queued
+                  ? "bg-yellow-100 text-yellow-800 dark:bg-yellow-900 dark:text-yellow-200"
+                  : novel.completed
+                    ? "bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200"
+                    : "bg-gray-100 text-gray-600 dark:bg-gray-700 dark:text-gray-400";
+                return (
+                  <div key={novel.id} className="flex items-center gap-3 text-sm">
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center justify-between mb-0.5">
+                        <span className="font-medium text-gray-900 dark:text-white truncate">
+                          {novel.title}
+                        </span>
+                        <span className={`ml-2 text-xs px-2 py-0.5 rounded shrink-0 ${statusClass}`}>
+                          {statusLabel}
+                        </span>
+                      </div>
+                      <div className="w-full h-2 bg-gray-200 dark:bg-gray-700 rounded-full overflow-hidden">
+                        <div
+                          className={`h-full transition-all duration-500 ${
+                            novel.completed ? "bg-green-500" : "bg-blue-600"
+                          }`}
+                          style={{ width: `${pct}%` }}
+                        />
+                      </div>
+                    </div>
+                    <span className="text-xs text-gray-500 dark:text-gray-400 shrink-0">
+                      {novel.saved}/{novel.total}
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
         )}
       </div>
     </div>

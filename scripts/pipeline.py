@@ -208,6 +208,29 @@ def run_discover(wr_id: int, novel_title: str = "", max_pages: int = 50, source:
         added += 1
 
     _save_queue(queue)
+
+    # 작품 메인 wr_id 기록 (loop의 자동 discover를 위해 meta.json에 저장)
+    if novel_title:
+        try:
+            novel_id_dir = novel_title.replace(' ', '_').replace('/', '_')
+            novel_dir = Path('/opt/ai_data/flaresolverr/novels') / novel_id_dir
+            novel_dir.mkdir(parents=True, exist_ok=True)
+            meta_file = novel_dir / 'meta.json'
+            meta = {}
+            if meta_file.exists():
+                try:
+                    with open(meta_file, encoding='utf-8') as f:
+                        meta = json.load(f)
+                except Exception:
+                    meta = {}
+            meta['main_wr_id'] = wr_id
+            meta['source'] = source
+            meta['title'] = novel_title
+            with open(meta_file, 'w', encoding='utf-8') as f:
+                json.dump(meta, f, ensure_ascii=False, indent=2)
+        except Exception as e:
+            log.warning(f"meta.json main_wr_id 기록 실패: {e}")
+
     log.info(f"discover 완료: {added}개 추가 (총 {len(all_chapters)}개 발견, 저장됨 {len(saved_ids)}개 스킵, source={source})")
     return added
 
@@ -510,6 +533,40 @@ def run_all(novel_main_wr_id: int, novel_title: str, source: str = "bookto31") -
     return results
 
 
+def _auto_discover(source: str = "bookto31") -> None:
+    """저장된 연재작들의 새 회차를 주기적으로 discover.
+
+    meta.json에 기록된 main_wr_id를 읽어 각 작품의 discover를 실행.
+    queue에 없거나 이미 완결인 작품은 스킵.
+    """
+    novels_dir = Path('/opt/ai_data/flaresolverr/novels')
+    if not novels_dir.exists():
+        return
+    for novel_dir in sorted(novels_dir.iterdir()):
+        if not novel_dir.is_dir():
+            continue
+        meta_file = novel_dir / 'meta.json'
+        if not meta_file.exists():
+            continue
+        try:
+            with open(meta_file, encoding='utf-8') as f:
+                meta = json.load(f)
+        except Exception:
+            continue
+        # 완결작은 새 회차 없음
+        if meta.get('status') == '완결':
+            continue
+        main_wr_id = meta.get('main_wr_id')
+        title = meta.get('title') or novel_dir.name.replace('_', ' ')
+        if not main_wr_id:
+            continue
+        log.info(f"  auto-discover: {title} (main_wr_id={main_wr_id})")
+        try:
+            run_discover(int(main_wr_id), title, max_pages=8, source=source)
+        except Exception as e:
+            log.warning(f"  {title} discover 실패: {e}")
+
+
 def main():
     if len(sys.argv) < 2:
         print(__doc__)
@@ -588,6 +645,14 @@ def main():
                 cycle += 1
                 log.info(f"\n--- Cycle {cycle} ---")
                 _write_status({"phase": "loop", "cycle": cycle, "source": source})
+
+                # bookto31: 매 12사이클(약 1시간)마다 연재작 새 회차 감지 (discover)
+                if source == "bookto31" and cycle % 12 == 0:
+                    log.info("discover: 연재작 새 회차 확인")
+                    try:
+                        _auto_discover(source)
+                    except Exception as e:
+                        log.warning(f"auto-discover 실패: {e}")
 
                 # collect (1개씩, source 필터)
                 result = run_collect(limit=1, source_filter=source)

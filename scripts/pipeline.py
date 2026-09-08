@@ -164,27 +164,43 @@ def run_discover(wr_id: int, novel_title: str = "", max_pages: int = 50, source:
         if new == 0 and epage > 1:
             break
 
-    # 큐에 추가
+    # 큐에 추가 (queue에 이미 있거나, 파일로 이미 저장된 회차는 제외)
     queue = _load_queue()
     existing_ids = {item['wr_id'] for item in queue}
+    # 이미 저장된 회차 (동일 작품 디렉토리의 wr_id.json)
+    saved_ids = set()
+    try:
+        novel_id_dir = novel_title.replace(' ', '_').replace('/', '_') if novel_title else f"novel_{wr_id}"
+        novel_dir = Path('/opt/ai_data/flaresolverr/novels') / novel_id_dir
+        if novel_dir.exists():
+            for f in novel_dir.glob("*.json"):
+                if f.name in ("meta.json", "_chapters_index.json"):
+                    continue
+                try:
+                    saved_ids.add(int(f.stem))
+                except ValueError:
+                    pass
+    except Exception:
+        pass
     added = 0
     for ch_wr_id, chapter in all_chapters:
-        if ch_wr_id not in existing_ids:
-            queue.append({
-                "wr_id": ch_wr_id,
-                "novel_title": novel_title,
-                "chapter": chapter,
-                "source": source,  # ← source 필드
-                "priority": 1 if chapter >= 800 else 5,
-                "added_at": datetime.now(timezone.utc).isoformat(),
-                "attempts": 0,
-                "last_error": None,
-            })
-            existing_ids.add(ch_wr_id)
-            added += 1
+        if ch_wr_id in existing_ids or ch_wr_id in saved_ids:
+            continue
+        queue.append({
+            "wr_id": ch_wr_id,
+            "novel_title": novel_title,
+            "chapter": chapter,
+            "source": source,  # ← source 필드
+            "priority": 1 if chapter >= 800 else 5,
+            "added_at": datetime.now(timezone.utc).isoformat(),
+            "attempts": 0,
+            "last_error": None,
+        })
+        existing_ids.add(ch_wr_id)
+        added += 1
 
     _save_queue(queue)
-    log.info(f"discover 완료: {added}개 추가 (총 {len(all_chapters)}개 발견, source={source})")
+    log.info(f"discover 완료: {added}개 추가 (총 {len(all_chapters)}개 발견, 저장됨 {len(saved_ids)}개 스킵, source={source})")
     return added
 
 
@@ -545,11 +561,16 @@ def main():
         run_all(wr_id, title, source)
 
     elif cmd == "loop":
-        """collect → index → revalidate 무한 루프 (5분 간격)."""
-        novel_id = sys.argv[2] if len(sys.argv) > 2 else None
+        """collect → index → revalidate 무한 루프 (5분 간격).
+
+        bookto31: 연재작 특성상 queue가 비어도 종료하지 않고 대기한다.
+                  (URL/discover로 회차가 추가되면 계속 수집)
+        newtoki/완결작: queue 소진 시 루프 종료.
+        """
+        novel_title = sys.argv[2] if len(sys.argv) > 2 else None
         source = _parse_source()
         log.info("=" * 50)
-        log.info(f"파이프라인 루프 시작 (source={source}, Ctrl+C로 중단)")
+        log.info(f"파이프라인 루프 시작 (source={source}, novel={novel_title or '전체'}, Ctrl+C로 중단)")
         log.info("=" * 50)
         # PID 기록
         PID_FILE.write_text(str(os.getpid()))
@@ -563,22 +584,33 @@ def main():
                 # collect (1개씩, source 필터)
                 result = run_collect(limit=1, source_filter=source)
                 if result['processed'] == 0 and result['remaining'] == 0:
+                    if source == "bookto31":
+                        # bookto31 연재작: queue가 비어도 계속 대기 (새 회차 추가 대기)
+                        log.info("큐 비어 있음 - bookto31은 새 회차 대기 중")
+                        log.info(f"  {CHAPTER_DELAY_SEC}초 대기...")
+                        time.sleep(CHAPTER_DELAY_SEC)
+                        continue
                     log.info("큐 비어 있음, 루프 종료")
                     break
 
                 # index (해당 소설만)
-                if novel_id:
-                    run_index(novel_id)
+                if novel_title:
+                    run_index(novel_title)
 
                 # revalidate (해당 소설만)
-                if novel_id:
-                    run_revalidate(novel_id)
+                if novel_title:
+                    run_revalidate(novel_title)
 
                 log.info(f"--- Cycle {cycle} 완료 (남은 작업: {result['remaining']}) ---")
 
-                # 큐가 비었으면 종료
+                # 큐가 비었으면 종료 (newtoki/완결작만)
                 remaining = _load_queue()
                 if not remaining:
+                    if source == "bookto31":
+                        log.info("bookto31: 모든 회차 수집 완료, 새 회차 대기 중")
+                        log.info(f"  {CHAPTER_DELAY_SEC}초 대기...")
+                        time.sleep(CHAPTER_DELAY_SEC)
+                        continue
                     log.info("모든 작업 완료, 루프 종료")
                     break
 

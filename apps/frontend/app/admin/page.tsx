@@ -75,7 +75,9 @@ export default function AdminPage() {
       title: string;
       saved: number;
       total: number;
+      status?: string;
       queued: boolean;
+      serializing: boolean;
       completed: boolean;
     }>;
   } | null>(null);
@@ -432,12 +434,20 @@ export default function AdminPage() {
                 const pct = novel.total > 0
                   ? Math.min(100, Math.round((novel.saved / novel.total) * 100))
                   : novel.completed ? 100 : 0;
-                const statusLabel = novel.queued ? "수집 중" : novel.completed ? "완료" : "대기";
-                const statusClass = novel.queued
-                  ? "bg-yellow-100 text-yellow-800 dark:bg-yellow-900 dark:text-yellow-200"
-                  : novel.completed
-                    ? "bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200"
-                    : "bg-gray-100 text-gray-600 dark:bg-gray-700 dark:text-gray-400";
+                const statusLabel = novel.completed
+                  ? "완료"
+                  : novel.queued
+                    ? "수집 중"
+                    : novel.serializing
+                      ? "연재 중"
+                      : "대기";
+                const statusClass = novel.completed
+                  ? "bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200"
+                  : novel.queued
+                    ? "bg-yellow-100 text-yellow-800 dark:bg-yellow-900 dark:text-yellow-200"
+                    : novel.serializing
+                      ? "bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200"
+                      : "bg-gray-100 text-gray-600 dark:bg-gray-700 dark:text-gray-400";
                 return (
                   <div key={novel.id} className="flex items-center gap-3 text-sm">
                     <div className="flex-1 min-w-0">

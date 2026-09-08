@@ -190,8 +190,8 @@ NOVELS_DIR = Path("/opt/ai_data/flaresolverr/novels")
 def get_novel_status() -> list[dict]:
     """모든 소설의 저장 상태 + 완료 여부 목록.
 
-    완료 판정: queue에 해당 작품이 남아있지 않고, 저장된 챕터가 0보다 크면 완료.
-    (totalChapters가 수집 중에는 부정확하므로 queue 잔여 여부로 판단)
+    완료 판정: meta.status == "완결" 이면 완료.
+    연재중 작품은 queue가 비어 있어도 계속 수집 대상이므로 "연재 중"으로 표시.
     """
     novels = []
     try:
@@ -226,13 +226,18 @@ def get_novel_status() -> list[dict]:
                 saved += 1
             title = meta.get("title") or novel_dir.name.replace("_", " ")
             total = meta.get("totalChapters") or saved
+            status = meta.get("status") or "unknown"
+            completed = status == "완결"
+            is_serial = status in ("연재중", "연재") or not completed
             novels.append({
                 "id": novel_dir.name,
                 "title": title,
                 "saved": saved,
                 "total": total,
+                "status": status,
                 "queued": title in queued_titles,
-                "completed": saved > 0 and title not in queued_titles,
+                "serializing": is_serial,
+                "completed": completed,
             })
     except Exception as e:
         log.warning(f"novel status 조회 실패: {e}")

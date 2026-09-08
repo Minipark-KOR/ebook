@@ -130,39 +130,46 @@ def run_discover(wr_id: int, novel_title: str = "", max_pages: int = 50, source:
         return 0
 
     # epage 파라미터로 페이지네이션 (select 드롭다운 회차 목록)
-    for epage in range(1, max_pages + 1):
-        url = f"https://bookto31.com/bbs/board.php?bo_table=novel&wr_id={wr_id}&epage={epage}"
-        html = fs.fetch(url)
+    # 화산귀환 등 일부 작품은 spage로 페이징되므로 둘 다 시도
+    for page_param in ("epage", "spage"):
+        page_seen = set()
+        for page in range(1, max_pages + 1):
+            url = f"https://bookto31.com/bbs/board.php?bo_table=novel&wr_id={wr_id}&{page_param}={page}"
+            html = fs.fetch(url)
 
-        # 첫 페이지에서 제목 추출
-        if epage == 1 and html:
-            import re as _re
-            title_m = _re.search(r"<title>(.*?)</title>", html)
-            if title_m:
-                title = title_m.group(1).strip()
-                title = _re.sub(r"\s*[-–|]\s*(?:북토끼|bookto31).*", "", title).strip()
-            if not title:
-                og_m = _re.search(r'<meta property="og:title" content="([^"]+)"', html)
-                if og_m:
-                    title = og_m.group(1).strip()
-        if not html or len(html) < 1000:
-            log.info(f"  epage={epage}: 응답 없음, 중단")
-            break
+            # 첫 페이지에서 제목 추출
+            if page == 1 and html and not title:
+                import re as _re
+                title_m = _re.search(r"<title>(.*?)</title>", html)
+                if title_m:
+                    title = title_m.group(1).strip()
+                    title = _re.sub(r"\s*[-–|]\s*(?:북토끼|bookto31).*", "", title).strip()
+                if not title:
+                    og_m = _re.search(r'<meta property="og:title" content="([^"]+)"', html)
+                    if og_m:
+                        title = og_m.group(1).strip()
+            if not html or len(html) < 1000:
+                log.info(f"  {page_param}={page}: 응답 없음, 중단")
+                break
 
-        page_chapters = extract_chapter_wr_ids_from_index(html)
-        if not page_chapters:
-            log.info(f"  epage={epage}: 회차 없음, 중단")
-            break
+            page_chapters = extract_chapter_wr_ids_from_index(html)
+            if not page_chapters:
+                log.info(f"  {page_param}={page}: 회차 없음, 중단")
+                break
 
-        new = 0
-        for ch_wr_id, chapter in page_chapters:
-            if ch_wr_id not in seen and ch_wr_id != wr_id:
-                seen.add(ch_wr_id)
-                all_chapters.append((ch_wr_id, chapter))
-                new += 1
-        log.info(f"  epage={epage}: {new}개 신규 (누적 {len(all_chapters)})")
-        if new == 0 and epage > 1:
-            break
+            new = 0
+            for ch_wr_id, chapter in page_chapters:
+                if ch_wr_id not in seen and ch_wr_id != wr_id:
+                    seen.add(ch_wr_id)
+                    all_chapters.append((ch_wr_id, chapter))
+                    page_seen.add(ch_wr_id)
+                    new += 1
+            log.info(f"  {page_param}={page}: {new}개 신규 (누적 {len(all_chapters)})")
+            if new == 0 and page > 1:
+                break
+            # 이미 epage에서 모든 회차를 얻었으면 spage는 스킵
+            if page_param == "epage" and page_seen and len(page_seen) >= 30 and len(all_chapters) > 30:
+                break
 
     # 큐에 추가 (queue에 이미 있거나, 파일로 이미 저장된 회차는 제외)
     queue = _load_queue()

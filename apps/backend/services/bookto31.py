@@ -144,34 +144,44 @@ def is_novel_index_page(html: str) -> bool:
 def extract_chapter_wr_ids_from_index(html: str) -> List[Tuple[int, int]]:
     """작품 메인 페이지에서 (wr_id, chapter_num) 추출.
 
-    북토끼/APMS 회차 nav는 item-subject 클래스 안에:
-    - <a href="...wr_id=N..." class="item-subject">
-    -     <span class="orangered">...</span>
-    -     오늘만 사는 기사 - 839화
-    -     <span class="count">N</span>
-    -   </a>
+    북토끼/APMS 회차 nav는 두 가지 구조가 있음:
+    1. select 드롭다운 (현재 사이트 기본):
+       <select name="wr_id" class="toon-episode-select">
+         <option value="58449">271화</option>
+       </select>
+    2. item-subject 링크 (구버전):
+       <a href="...wr_id=N..." class="item-subject">... N화 ...</a>
 
     Returns:
         [(wr_id, chapter_number), ...]
     """
     import re
 
-    pattern = re.compile(
-        r'<a[^>]*?(?:class="item-subject"[^>]*?)?'
-        r'href="[^"]*(?:&amp;)?wr_id=(\d+)[^"]*"'
-        r'[^>]*?(?:class="item-subject"[^>]*?)?>(.*?)</a>',
-        re.DOTALL,
-    )
     matches = []
-    for m in pattern.finditer(html):
-        wr_id = int(m.group(1))
-        inner = m.group(2)
-        text = re.sub(r'<[^>]+>', ' ', inner)
-        text = re.sub(r'\s+', ' ', text).strip()
-        ep_match = re.search(r'(\d+)(?:화|편|장)', text)
-        if ep_match:
-            chapter = int(ep_match.group(1))
-            matches.append((wr_id, chapter))
+
+    # 패턴 1: select > option 드롭다운
+    for m in re.finditer(
+        r'<option[^>]*value="(\d+)"[^>]*>\s*(\d+)\s*(?:화|편|장)\s*</option>',
+        html,
+    ):
+        matches.append((int(m.group(1)), int(m.group(2))))
+
+    # 패턴 2: item-subject 링크 (옵션이 없을 때만 사용)
+    if not matches:
+        pattern = re.compile(
+            r'<a[^>]*?(?:class="item-subject"[^>]*?)?'
+            r'href="[^"]*(?:&amp;)?wr_id=(\d+)[^"]*"'
+            r'[^>]*?(?:class="item-subject"[^>]*?)?>(.*?)</a>',
+            re.DOTALL,
+        )
+        for m in pattern.finditer(html):
+            wr_id = int(m.group(1))
+            inner = m.group(2)
+            text = re.sub(r'<[^>]+>', ' ', inner)
+            text = re.sub(r'\s+', ' ', text).strip()
+            ep_match = re.search(r'(\d+)(?:화|편|장)', text)
+            if ep_match:
+                matches.append((wr_id, int(ep_match.group(1))))
 
     seen = set()
     unique = []

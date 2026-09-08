@@ -114,7 +114,7 @@ def run_discover(wr_id: int, novel_title: str = "", max_pages: int = 50, source:
 
     # dry_run: 첫 페이지만 fetch해서 제목 추출
     if dry_run:
-        url = f"https://bookto31.com/bbs/board.php?bo_table=novel&wr_id={wr_id}&spage=1"
+        url = f"https://bookto31.com/bbs/board.php?bo_table=novel&wr_id={wr_id}&epage=1"
         html = fs.fetch(url)
         if html:
             import re as _re
@@ -129,12 +129,13 @@ def run_discover(wr_id: int, novel_title: str = "", max_pages: int = 50, source:
         print(f"TITLE:{title or novel_title or f'소설 {wr_id}'}")
         return 0
 
-    for spage in range(1, max_pages + 1):
-        url = f"https://bookto31.com/bbs/board.php?bo_table=novel&wr_id={wr_id}&spage={spage}"
+    # epage 파라미터로 페이지네이션 (select 드롭다운 회차 목록)
+    for epage in range(1, max_pages + 1):
+        url = f"https://bookto31.com/bbs/board.php?bo_table=novel&wr_id={wr_id}&epage={epage}"
         html = fs.fetch(url)
 
         # 첫 페이지에서 제목 추출
-        if spage == 1 and html:
+        if epage == 1 and html:
             import re as _re
             title_m = _re.search(r"<title>(.*?)</title>", html)
             if title_m:
@@ -145,12 +146,12 @@ def run_discover(wr_id: int, novel_title: str = "", max_pages: int = 50, source:
                 if og_m:
                     title = og_m.group(1).strip()
         if not html or len(html) < 1000:
-            log.info(f"  spage={spage}: 응답 없음, 중단")
+            log.info(f"  epage={epage}: 응답 없음, 중단")
             break
 
         page_chapters = extract_chapter_wr_ids_from_index(html)
         if not page_chapters:
-            log.info(f"  spage={spage}: 회차 없음, 중단")
+            log.info(f"  epage={epage}: 회차 없음, 중단")
             break
 
         new = 0
@@ -159,8 +160,8 @@ def run_discover(wr_id: int, novel_title: str = "", max_pages: int = 50, source:
                 seen.add(ch_wr_id)
                 all_chapters.append((ch_wr_id, chapter))
                 new += 1
-        log.info(f"  spage={spage}: {new}개 신규 (누적 {len(all_chapters)})")
-        if new == 0 and spage > 1:
+        log.info(f"  epage={epage}: {new}개 신규 (누적 {len(all_chapters)})")
+        if new == 0 and epage > 1:
             break
 
     # 큐에 추가

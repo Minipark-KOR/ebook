@@ -640,19 +640,26 @@ def main():
         # PID 기록
         PID_FILE.write_text(str(os.getpid()))
         cycle = 0
+        last_discover_day = None  # 이번 달에 discover 실행했는지 추적
         try:
             while True:
                 cycle += 1
                 log.info(f"\n--- Cycle {cycle} ---")
                 _write_status({"phase": "loop", "cycle": cycle, "source": source})
 
-                # bookto31: 매 12사이클(약 1시간)마다 연재작 새 회차 감지 (discover)
-                if source == "bookto31" and cycle % 12 == 0:
-                    log.info("discover: 연재작 새 회차 확인")
-                    try:
-                        _auto_discover(source)
-                    except Exception as e:
-                        log.warning(f"auto-discover 실패: {e}")
+                # bookto31: 매월 1일 1회 연재작 새 회차 감지 (discover)
+                today = datetime.now().strftime("%Y-%m")
+                if source == "bookto31" and today != last_discover_day:
+                    if datetime.now().day == 1:
+                        last_discover_day = today
+                        log.info("discover: 매월 1일 연재작 새 회차 확인")
+                        try:
+                            _auto_discover(source)
+                        except Exception as e:
+                            log.warning(f"auto-discover 실패: {e}")
+                    else:
+                        # 1일이 아니면 이번 달 discover는 아직 안 함
+                        pass
 
                 # collect (1개씩, source 필터)
                 result = run_collect(limit=1, source_filter=source)

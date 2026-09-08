@@ -24,12 +24,42 @@ export default function AdminPage() {
     detail?: string;
   } | null>(null);
 
+  // Pipeline status polling
+  const [pipelineStatus, setPipelineStatus] = useState<{
+    loop_running: boolean;
+    queue: { total: number; by_source: Record<string, number> };
+    current_novel?: string;
+    processed?: number;
+  } | null>(null);
+  const [polling, setPolling] = useState(false);
+
   // Check sessionStorage on mount
   useEffect(() => {
     if (sessionStorage.getItem("admin_auth") === "1") {
       setAuthenticated(true);
     }
   }, []);
+
+  // Poll pipeline status
+  useEffect(() => {
+    if (!polling) return;
+
+    const fetchStatus = async () => {
+      try {
+        const res = await fetch("/api/pipeline/status");
+        if (res.ok) {
+          const data = await res.json();
+          setPipelineStatus(data);
+        }
+      } catch (e) {
+        console.error("Failed to fetch pipeline status", e);
+      }
+    };
+
+    fetchStatus();
+    const interval = setInterval(fetchStatus, 3000);
+    return () => clearInterval(interval);
+  }, [polling]);
 
   function handleLogin(e: React.FormEvent) {
     e.preventDefault();
@@ -67,6 +97,9 @@ export default function AdminPage() {
       setResult({ ok: false, message: String(err) });
     } finally {
       setLoading(false);
+    }
+    if (result?.ok) {
+      setPolling(true);
     }
   }
 

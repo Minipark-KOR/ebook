@@ -36,7 +36,18 @@ WATCHER_DIR = Path('/opt/ai_data/flaresolverr/ebook_watcher')
 WATCHER_DIR.mkdir(parents=True, exist_ok=True)
 QUEUE_FILE = WATCHER_DIR / 'queue.json'
 STATUS_FILE = WATCHER_DIR / 'status.json'
+PID_FILE = WATCHER_DIR / 'pipeline.pid'
 CHAPTER_DELAY_SEC = 300
+
+
+def _write_status(data: dict) -> None:
+    """진행 상황을 status.json에 기록 (loop/collect가 주기적으로 호출)."""
+    try:
+        data = dict(data)
+        data["updated_at"] = datetime.now(timezone.utc).isoformat()
+        STATUS_FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2))
+    except Exception as e:
+        log.warning(f"status.json 기록 실패: {e}")
 
 # ============================================================
 # 수집기 레지스트리 — source별 collector 분기
@@ -197,6 +208,7 @@ def run_collect(limit: int = 0, source_filter: str = "") -> dict:
     processed = 0
     errors = []
     max_run = limit if limit > 0 else len(queue)
+    total = len(queue)
 
     for i in range(min(max_run, len(queue))):
         item = queue[i]
@@ -204,6 +216,22 @@ def run_collect(limit: int = 0, source_filter: str = "") -> dict:
         novel_title = item.get('novel_title', '')
         source = item.get('source', 'bookto31')
         item['attempts'] = item.get('attempts', 0) + 1
+
+        # 진행 상황 기록 (현재 처리 중인 회차)
+        _write_status({
+            "phase": "collect",
+            "current": {
+                "wr_id": wr_id,
+                "novel_title": novel_title,
+                "chapter": item.get('chapter'),
+                "source": source,
+                "attempt": item['attempts'],
+            },
+            "index": i + 1,
+            "total": total,
+            "remaining": total - i - 1,
+            "processed": processed,
+        })
 
         log.info(f"[{i+1}/{len(queue)}] wr_id={wr_id} ({novel_title}) source={source} 시도 {item['attempts']}/3")
 
@@ -251,6 +279,15 @@ def run_collect(limit: int = 0, source_filter: str = "") -> dict:
 
     _save_queue(queue)
     log.info(f"collect 완료: {processed}개 처리, {len(queue)}개 남음")
+    _write_status({
+        "phase": "collect",
+        "current": None,
+        "index": total,
+        "total": total,
+        "remaining": len(queue),
+        "processed": processed,
+        "last_result": {"processed": processed, "errors": len(errors), "remaining": len(queue)},
+    })
     return {"processed": processed, "errors": errors, "remaining": len(queue)}
 
 
@@ -520,6 +557,7 @@ def main():
             while True:
                 cycle += 1
                 log.info(f"\n--- Cycle {cycle} ---")
+                _write_status({"phase": "loop", "cycle": cycle, "source": source})
 
                 # collect (1개씩, source 필터)
                 result = run_collect(limit=1, source_filter=source)

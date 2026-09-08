@@ -167,6 +167,18 @@ def get_queue_stats() -> dict:
         return {"total": 0, "by_source": {}}
 
 
+def get_progress() -> dict:
+    """pipeline.py가 status.json에 기록한 진행 상황 조회."""
+    status_file = WATCHER_DIR / "status.json"
+    if not status_file.exists():
+        return {}
+    try:
+        with open(status_file) as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
 # ============================================================
 # API 엔드포인트
 # ============================================================
@@ -251,6 +263,7 @@ async def pipeline_status():
     return {
         "loop_running": is_loop_running(),
         "queue": get_queue_stats(),
+        "progress": get_progress(),
         "current_job": current_job,
         "jobs": jobs,
     }

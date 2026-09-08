@@ -39,6 +39,27 @@ export default function AdminPage() {
       status: string;
       message?: string;
     }>;
+    progress?: {
+      phase?: string;
+      cycle?: number;
+      source?: string;
+      current?: {
+        wr_id?: number;
+        novel_title?: string;
+        chapter?: number | null;
+        source?: string;
+        attempt?: number;
+      } | null;
+      index?: number;
+      total?: number;
+      remaining?: number;
+      processed?: number;
+      last_result?: {
+        processed?: number;
+        errors?: number;
+        remaining?: number;
+      };
+    };
   } | null>(null);
   // Check sessionStorage on mount
   useEffect(() => {
@@ -232,6 +253,21 @@ export default function AdminPage() {
 
         {/* Pipeline Progress */}
         {pipelineStatus && (pipelineStatus.current_job || pipelineStatus.loop_running || pipelineStatus.queue.total > 0) && (
+          (() => {
+            const progress = pipelineStatus.progress;
+            const cur = progress?.current;
+            const total = progress?.total || 0;
+            const index = progress?.index || 0;
+            const processed = progress?.processed ?? 0;
+            const remaining = progress?.remaining ?? pipelineStatus.queue.total;
+            // 진행률: collect 단계에서는 current index/total, 아니면 큐 기반 추정
+            const pct = total > 0
+              ? Math.min(100, Math.round((index / total) * 100))
+              : pipelineStatus.queue.total > 0
+                ? 100
+                : 0;
+
+            return (
           <div className="mt-8 bg-white dark:bg-gray-800 rounded-lg shadow p-6">
             <h2 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">
               진행 중인 작업
@@ -244,32 +280,38 @@ export default function AdminPage() {
                 </span>
               </div>
 
-              {pipelineStatus.current_job && (
+              {/* 현재 처리 중인 회차 */}
+              {progress && (
                 <div className="text-sm">
                   <div className="flex items-center justify-between mb-1">
-                    <span className="text-gray-600 dark:text-gray-400">현재 작업</span>
+                    <span className="text-gray-600 dark:text-gray-400">
+                      {progress.phase === "collect" ? "현재 수집 중" : progress.phase === "loop" ? "루프 대기" : "현재 작업"}
+                    </span>
                     <span className="font-medium text-gray-900 dark:text-white">
-                      {pipelineStatus.current_job.status}
+                      {cur ? `${cur.novel_title || "제목 확인 중"}` : progress.phase === "collect" ? "준비 중" : "완료"}
                     </span>
                   </div>
-                  <p className="text-gray-900 dark:text-white font-medium mb-2">
-                    {pipelineStatus.current_job.title
-                      ? `${pipelineStatus.current_job.title} (${pipelineStatus.current_job.novel_id})`
-                      : `${pipelineStatus.current_job.novel_id} - 제목 확인 중...`}
-                  </p>
-                  <div className="w-full h-3 bg-gray-200 dark:bg-gray-700 rounded-full overflow-hidden">
-                    <div
-                      className="h-full bg-blue-600 rounded-full animate-pulse transition-all duration-500"
-                      style={{
-                        width: pipelineStatus.current_job.status === "완료" ? "100%" : "60%",
-                      }}
-                    />
-                  </div>
-                  {pipelineStatus.current_job.message && (
-                    <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
-                      {pipelineStatus.current_job.message}
+
+                  {cur && (
+                    <p className="text-gray-900 dark:text-white font-medium mb-2">
+                      {cur.novel_title || "제목 확인 중"}
+                      {cur.chapter ? ` · ${cur.chapter}화` : ""}
+                      {cur.wr_id ? ` (wr_id ${cur.wr_id})` : ""}
+                      {cur.attempt && cur.attempt > 1 ? ` · 시도 ${cur.attempt}/3` : ""}
                     </p>
                   )}
+
+                  <div className="w-full h-3 bg-gray-200 dark:bg-gray-700 rounded-full overflow-hidden">
+                    <div
+                      className="h-full bg-blue-600 rounded-full transition-all duration-500"
+                      style={{ width: `${pct}%` }}
+                    />
+                  </div>
+                  <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                    {total > 0
+                      ? `${index}/${total} · 완료 ${processed} · 남음 ${remaining}`
+                      : `완료 ${processed} · 남음 ${remaining}`}
+                  </p>
                 </div>
               )}
 
@@ -312,6 +354,8 @@ export default function AdminPage() {
               3초마다 자동 새로고침 · 진행 중인 작업이 없으면 숨겨집니다.
             </p>
           </div>
+            );
+          })()
         )}
       </div>
     </div>

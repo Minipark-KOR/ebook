@@ -154,7 +154,7 @@ def is_loop_running() -> bool:
 def get_queue_stats() -> dict:
     """큐 통계."""
     if not QUEUE_FILE.exists():
-        return {"total": 0, "by_source": {}}
+        return {"total": 0, "by_source": {}, "next_item": None}
     try:
         with open(QUEUE_FILE) as f:
             queue = json.load(f)
@@ -162,9 +162,18 @@ def get_queue_stats() -> dict:
         for item in queue:
             s = item.get("source", "bookto31")
             by_source[s] = by_source.get(s, 0) + 1
-        return {"total": len(queue), "by_source": by_source}
+        next_item = None
+        if queue:
+            head = queue[0]
+            next_item = {
+                "wr_id": head.get("wr_id"),
+                "novel_title": head.get("novel_title"),
+                "chapter": head.get("chapter"),
+                "source": head.get("source", "bookto31"),
+            }
+        return {"total": len(queue), "by_source": by_source, "next_item": next_item}
     except Exception:
-        return {"total": 0, "by_source": {}}
+        return {"total": 0, "by_source": {}, "next_item": None}
 
 
 def get_progress() -> dict:

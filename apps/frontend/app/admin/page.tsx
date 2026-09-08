@@ -26,7 +26,16 @@ export default function AdminPage() {
   // Pipeline status polling
   const [pipelineStatus, setPipelineStatus] = useState<{
     loop_running: boolean;
-    queue: { total: number; by_source: Record<string, number> };
+    queue: {
+      total: number;
+      by_source: Record<string, number>;
+      next_item?: {
+        wr_id?: number;
+        novel_title?: string;
+        chapter?: number | null;
+        source?: string;
+      } | null;
+    };
     current_job?: {
       novel_id: string;
       title: string;
@@ -260,12 +269,14 @@ export default function AdminPage() {
             const index = progress?.index || 0;
             const processed = progress?.processed ?? 0;
             const remaining = progress?.remaining ?? pipelineStatus.queue.total;
+            const nextItem = pipelineStatus.queue.next_item;
             // 진행률: collect 단계에서는 current index/total, 아니면 큐 기반 추정
             const pct = total > 0
               ? Math.min(100, Math.round((index / total) * 100))
               : pipelineStatus.queue.total > 0
                 ? 100
                 : 0;
+            const collectTarget = cur || nextItem;
 
             return (
           <div className="mt-8 bg-white dark:bg-gray-800 rounded-lg shadow p-6">
@@ -280,27 +291,54 @@ export default function AdminPage() {
                 </span>
               </div>
 
-              {/* 현재 처리 중인 회차 */}
-              {progress && (
+              {/* bookto31 수집 현황 */}
+              {collectTarget && (
                 <div className="text-sm">
                   <div className="flex items-center justify-between mb-1">
                     <span className="text-gray-600 dark:text-gray-400">
-                      {progress.phase === "collect" ? "현재 수집 중" : progress.phase === "loop" ? "루프 대기" : "현재 작업"}
+                      {collectTarget.source || "bookto31"} 수집
                     </span>
                     <span className="font-medium text-gray-900 dark:text-white">
-                      {cur ? `${cur.novel_title || "제목 확인 중"}` : progress.phase === "collect" ? "준비 중" : "완료"}
+                      {cur ? "수집 중" : "다음 대상"}
                     </span>
                   </div>
 
-                  {cur && (
-                    <p className="text-gray-900 dark:text-white font-medium mb-2">
-                      {cur.novel_title || "제목 확인 중"}
-                      {cur.chapter ? ` · ${cur.chapter}화` : ""}
-                      {cur.wr_id ? ` (wr_id ${cur.wr_id})` : ""}
-                      {cur.attempt && cur.attempt > 1 ? ` · 시도 ${cur.attempt}/3` : ""}
-                    </p>
-                  )}
+                  <p className="text-gray-900 dark:text-white font-medium mb-2">
+                    {collectTarget.novel_title || "제목 확인 중"}
+                    {collectTarget.chapter ? ` · ${collectTarget.chapter}화` : ""}
+                    {collectTarget.wr_id ? ` (wr_id ${collectTarget.wr_id})` : ""}
+                    {cur?.attempt && cur.attempt > 1 ? ` · 시도 ${cur.attempt}/3` : ""}
+                  </p>
 
+                  {progress && (
+                    <>
+                      <div className="w-full h-3 bg-gray-200 dark:bg-gray-700 rounded-full overflow-hidden">
+                        <div
+                          className="h-full bg-blue-600 rounded-full transition-all duration-500"
+                          style={{ width: `${pct}%` }}
+                        />
+                      </div>
+                      <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                        {total > 0
+                          ? `${index}/${total} · 완료 ${processed} · 남음 ${remaining}`
+                          : `완료 ${processed} · 남음 ${remaining}`}
+                      </p>
+                    </>
+                  )}
+                </div>
+              )}
+
+              {/* 현재 처리 중인 회차 */}
+              {progress && !collectTarget && (
+                <div className="text-sm">
+                  <div className="flex items-center justify-between mb-1">
+                    <span className="text-gray-600 dark:text-gray-400">
+                      {progress.phase === "collect" ? "수집 진행도" : progress.phase === "loop" ? "루프 대기" : "현재 작업"}
+                    </span>
+                    <span className="font-medium text-gray-900 dark:text-white">
+                      {progress.phase === "collect" ? "준비 중" : "완료"}
+                    </span>
+                  </div>
                   <div className="w-full h-3 bg-gray-200 dark:bg-gray-700 rounded-full overflow-hidden">
                     <div
                       className="h-full bg-blue-600 rounded-full transition-all duration-500"

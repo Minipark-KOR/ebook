@@ -29,6 +29,7 @@ export default function AdminPage() {
     queue: {
       total: number;
       by_source: Record<string, number>;
+      by_novel?: Record<string, number>;
       next_item?: {
         wr_id?: number;
         novel_title?: string;
@@ -382,6 +383,22 @@ export default function AdminPage() {
                         className="px-2 py-0.5 bg-gray-100 dark:bg-gray-700 rounded text-xs"
                       >
                         {source}: {count}개
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {pipelineStatus.queue.by_novel && Object.keys(pipelineStatus.queue.by_novel).length > 0 && (
+                <div className="text-sm text-gray-600 dark:text-gray-400">
+                  <div className="font-medium text-gray-900 dark:text-white mb-1">작품별 대기열</div>
+                  <div className="flex flex-wrap gap-2">
+                    {Object.entries(pipelineStatus.queue.by_novel).map(([title, count]) => (
+                      <span
+                        key={title}
+                        className="px-2 py-0.5 bg-gray-100 dark:bg-gray-700 rounded text-xs"
+                      >
+                        {title}: {count}개
                       </span>
                     ))}
                   </div>

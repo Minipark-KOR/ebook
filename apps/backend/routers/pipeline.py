@@ -159,9 +159,12 @@ def get_queue_stats() -> dict:
         with open(QUEUE_FILE) as f:
             queue = json.load(f)
         by_source = {}
+        by_novel = {}
         for item in queue:
             s = item.get("source", "bookto31")
             by_source[s] = by_source.get(s, 0) + 1
+            t = item.get("novel_title") or "(제목 없음)"
+            by_novel[t] = by_novel.get(t, 0) + 1
         next_item = None
         if queue:
             head = queue[0]
@@ -171,7 +174,12 @@ def get_queue_stats() -> dict:
                 "chapter": head.get("chapter"),
                 "source": head.get("source", "bookto31"),
             }
-        return {"total": len(queue), "by_source": by_source, "next_item": next_item}
+        return {
+            "total": len(queue),
+            "by_source": by_source,
+            "by_novel": by_novel,
+            "next_item": next_item,
+        }
     except Exception:
         return {"total": 0, "by_source": {}, "next_item": None}
 

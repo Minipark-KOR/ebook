@@ -3,7 +3,7 @@
 import { useState, useEffect } from "react";
 import Link from "next/link";
 
-const ADMIN_PASSWORD = "0107460416";
+const ADMIN_PASSWORD = "01074604416";
 
 export default function AdminPage() {
   const [authenticated, setAuthenticated] = useState(false);

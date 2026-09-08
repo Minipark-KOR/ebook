@@ -27,8 +27,18 @@ export default function AdminPage() {
   const [pipelineStatus, setPipelineStatus] = useState<{
     loop_running: boolean;
     queue: { total: number; by_source: Record<string, number> };
-    current_novel?: string;
-    processed?: number;
+    current_job?: {
+      novel_id: string;
+      title: string;
+      status: string;
+      message?: string;
+    } | null;
+    jobs?: Array<{
+      novel_id: string;
+      title: string;
+      status: string;
+      message?: string;
+    }>;
   } | null>(null);
   const [polling, setPolling] = useState(false);
 
@@ -233,13 +243,42 @@ export default function AdminPage() {
             <h2 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">
               진행 중인 작업
             </h2>
-            <div className="space-y-3">
+            <div className="space-y-4">
               <div className="flex items-center justify-between text-sm">
                 <span className="text-gray-600 dark:text-gray-400">파이프라인 루프</span>
                 <span className={`font-medium px-2 py-0.5 rounded ${pipelineStatus.loop_running ? "bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200" : "bg-gray-100 text-gray-600 dark:bg-gray-700 dark:text-gray-400"}`}>
                   {pipelineStatus.loop_running ? "실행 중" : "중지됨"}
                 </span>
               </div>
+
+              {pipelineStatus.current_job && (
+                <div className="text-sm">
+                  <div className="flex items-center justify-between mb-1">
+                    <span className="text-gray-600 dark:text-gray-400">현재 작업</span>
+                    <span className="font-medium text-gray-900 dark:text-white">
+                      {pipelineStatus.current_job.status}
+                    </span>
+                  </div>
+                  <p className="text-gray-900 dark:text-white font-medium mb-2">
+                    {pipelineStatus.current_job.title
+                      ? `${pipelineStatus.current_job.title} (${pipelineStatus.current_job.novel_id})`
+                      : `${pipelineStatus.current_job.novel_id} - 제목 확인 중...`}
+                  </p>
+                  <div className="w-full h-3 bg-gray-200 dark:bg-gray-700 rounded-full overflow-hidden">
+                    <div
+                      className="h-full bg-blue-600 rounded-full animate-pulse transition-all duration-500"
+                      style={{
+                        width: pipelineStatus.current_job.status === "완료" ? "100%" : "60%",
+                      }}
+                    />
+                  </div>
+                  {pipelineStatus.current_job.message && (
+                    <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                      {pipelineStatus.current_job.message}
+                    </p>
+                  )}
+                </div>
+              )}
 
               <div>
                 <div className="flex items-center justify-between text-sm mb-1">

@@ -10,7 +10,6 @@ export default function AdminPage() {
   const [loginPw, setLoginPw] = useState("");
   const [loginError, setLoginError] = useState(false);
 
-  const [password, setPassword] = useState("");
   const [url, setUrl] = useState("");
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState<{
@@ -78,8 +77,8 @@ export default function AdminPage() {
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
-    if (!password || !url) {
-      setResult({ ok: false, message: "비밀번호와 URL을 모두 입력하세요" });
+    if (!url) {
+      setResult({ ok: false, message: "작품 URL을 입력하세요" });
       return;
     }
     setLoading(true);
@@ -89,7 +88,7 @@ export default function AdminPage() {
       const res = await fetch("/api/pipeline/start", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ password, url }),
+        body: JSON.stringify({ password: ADMIN_PASSWORD, url }),
       });
       const data = await res.json();
       if (!res.ok) {
@@ -170,20 +169,6 @@ export default function AdminPage() {
         </p>
 
         <form onSubmit={handleSubmit} className="space-y-4 bg-white dark:bg-gray-800 rounded-lg shadow p-6">
-          <div>
-            <label htmlFor="password" className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-              비밀번호
-            </label>
-            <input
-              id="password"
-              type="password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              placeholder="관리자 비밀번호"
-              className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
-            />
-          </div>
-
           <div>
             <label htmlFor="url" className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
               작품 URL

@@ -50,6 +50,10 @@ export default function AdminPage() {
         if (res.ok) {
           const data = await res.json();
           setPipelineStatus(data);
+          // Auto-stop polling when queue empty and loop stopped
+          if (!data.loop_running && data.queue.total === 0) {
+            setPolling(false);
+          }
         }
       } catch (e) {
         console.error("Failed to fetch pipeline status", e);
@@ -92,14 +96,12 @@ export default function AdminPage() {
         setResult({ ok: false, message: data.detail || `HTTP ${res.status}` });
       } else {
         setResult(data);
+        setPolling(true);
       }
     } catch (err) {
       setResult({ ok: false, message: String(err) });
     } finally {
       setLoading(false);
-    }
-    if (result?.ok) {
-      setPolling(true);
     }
   }
 
@@ -237,6 +239,61 @@ export default function AdminPage() {
                 <p className="text-sm text-red-700 dark:text-red-300">{result.message || result.detail}</p>
               </div>
             )}
+          </div>
+        )}
+
+        {/* Pipeline Progress */}
+        {(polling || pipelineStatus?.loop_running) && pipelineStatus && (
+          <div className="mt-8 bg-white dark:bg-gray-800 rounded-lg shadow p-6">
+            <h2 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">
+              진행 중인 작업
+            </h2>
+            <div className="space-y-3">
+              <div className="flex items-center justify-between text-sm">
+                <span className="text-gray-600 dark:text-gray-400">파이프라인 루프</span>
+                <span className={`font-medium px-2 py-0.5 rounded ${pipelineStatus.loop_running ? "bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200" : "bg-gray-100 text-gray-600 dark:bg-gray-700 dark:text-gray-400"}`}>
+                  {pipelineStatus.loop_running ? "실행 중" : "중지됨"}
+                </span>
+              </div>
+
+              <div>
+                <div className="flex items-center justify-between text-sm mb-1">
+                  <span className="text-gray-600 dark:text-gray-400">큐 진행도</span>
+                  <span className="font-medium text-gray-900 dark:text-white">
+                    {pipelineStatus.queue.total > 0
+                      ? `${pipelineStatus.queue.total}개 대기 중`
+                      : "대기열 비어있음"}
+                  </span>
+                </div>
+                <div className="w-full h-3 bg-gray-200 dark:bg-gray-700 rounded-full overflow-hidden">
+                  <div
+                    className="h-full bg-blue-600 transition-all duration-300"
+                    style={{
+                      width: pipelineStatus.queue.total > 0 ? "100%" : "0%",
+                    }}
+                  />
+                </div>
+              </div>
+
+              {pipelineStatus.queue.by_source && Object.keys(pipelineStatus.queue.by_source).length > 0 && (
+                <div className="text-sm text-gray-600 dark:text-gray-400">
+                  <div className="font-medium text-gray-900 dark:text-white mb-1">소스별 대기열</div>
+                  <div className="flex flex-wrap gap-2">
+                    {Object.entries(pipelineStatus.queue.by_source).map(([source, count]) => (
+                      <span
+                        key={source}
+                        className="px-2 py-0.5 bg-gray-100 dark:bg-gray-700 rounded text-xs"
+                      >
+                        {source}: {count}개
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+            <p className="mt-4 text-xs text-gray-500 dark:text-gray-400">
+              3초마다 자동 새로고침 · 큐가 비고 루프가 중지되면 자동으로 사라집니다.
+            </p>
           </div>
         )}
       </div>

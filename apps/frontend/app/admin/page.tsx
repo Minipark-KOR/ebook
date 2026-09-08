@@ -40,8 +40,6 @@ export default function AdminPage() {
       message?: string;
     }>;
   } | null>(null);
-  const [polling, setPolling] = useState(false);
-
   // Check sessionStorage on mount
   useEffect(() => {
     if (sessionStorage.getItem("admin_auth") === "1") {
@@ -49,9 +47,9 @@ export default function AdminPage() {
     }
   }, []);
 
-  // Poll pipeline status
+  // Poll pipeline status whenever authenticated
   useEffect(() => {
-    if (!polling) return;
+    if (!authenticated) return;
 
     const fetchStatus = async () => {
       try {
@@ -59,10 +57,6 @@ export default function AdminPage() {
         if (res.ok) {
           const data = await res.json();
           setPipelineStatus(data);
-          // Auto-stop polling when queue empty and loop stopped
-          if (!data.loop_running && data.queue.total === 0) {
-            setPolling(false);
-          }
         }
       } catch (e) {
         console.error("Failed to fetch pipeline status", e);
@@ -72,7 +66,7 @@ export default function AdminPage() {
     fetchStatus();
     const interval = setInterval(fetchStatus, 3000);
     return () => clearInterval(interval);
-  }, [polling]);
+  }, [authenticated]);
 
   function handleLogin(e: React.FormEvent) {
     e.preventDefault();
@@ -105,7 +99,6 @@ export default function AdminPage() {
         setResult({ ok: false, message: data.detail || `HTTP ${res.status}` });
       } else {
         setResult(data);
-        setPolling(true);
       }
     } catch (err) {
       setResult({ ok: false, message: String(err) });
@@ -238,7 +231,7 @@ export default function AdminPage() {
         )}
 
         {/* Pipeline Progress */}
-        {(polling || pipelineStatus?.loop_running) && pipelineStatus && (
+        {pipelineStatus && (pipelineStatus.current_job || pipelineStatus.loop_running || pipelineStatus.queue.total > 0) && (
           <div className="mt-8 bg-white dark:bg-gray-800 rounded-lg shadow p-6">
             <h2 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">
               진행 중인 작업
@@ -316,7 +309,7 @@ export default function AdminPage() {
               )}
             </div>
             <p className="mt-4 text-xs text-gray-500 dark:text-gray-400">
-              3초마다 자동 새로고침 · 큐가 비고 루프가 중지되면 자동으로 사라집니다.
+              3초마다 자동 새로고침 · 진행 중인 작업이 없으면 숨겨집니다.
             </p>
           </div>
         )}

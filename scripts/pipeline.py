@@ -167,8 +167,9 @@ def run_discover(wr_id: int, novel_title: str = "", max_pages: int = 50, source:
             log.info(f"  {page_param}={page}: {new}개 신규 (누적 {len(all_chapters)})")
             if new == 0 and page > 1:
                 break
-            # 이미 epage에서 모든 회차를 얻었으면 spage는 스킵
-            if page_param == "epage" and page_seen and len(page_seen) >= 30 and len(all_chapters) > 30:
+            # 같은 페이지가 반복되면 (epage를 무시하는 작품) 다음 파라미터로
+            if new == 0 and page >= 1 and page_seen and all(c in page_seen for c, _ in page_chapters):
+                log.info(f"  {page_param}={page}: 중복 페이지, 중단")
                 break
 
     # 큐에 추가 (queue에 이미 있거나, 파일로 이미 저장된 회차는 제외)

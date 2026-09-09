@@ -25,8 +25,12 @@ from typing import Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
+from lib.sources import get_base_url
+
 # .env.local에서 프록시 설정 로드
 ENV_LOCAL = os.path.join(os.path.dirname(__file__), '..', '.env.local')
+
+TOKI31_BASE = get_base_url("toki31")
 
 
 def _load_proxy_env():
@@ -185,7 +189,7 @@ async def fetch_chapter_content_full(
         proxy_user = proxy_user + "__cr.kr"
 
     proxy_url = f"http://{proxy_host}:{proxy_port}"
-    target_url = f"https://toki31.com/novel/{novel_id}/{chapter_id}"
+    target_url = f"{TOKI31_BASE}/novel/{novel_id}/{chapter_id}"
 
     async with async_playwright() as p:
         browser = await p.chromium.launch(

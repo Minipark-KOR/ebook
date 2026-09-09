@@ -23,9 +23,10 @@ FlareSolverr 응답 구조 (FlareSolverr v3.x):
 from typing import Optional, List, Dict, Tuple
 
 from lib.flaresolverr_client import FlareSolverrSession
+from lib.sources import get_base_url
 
 
-BASE_URL = "https://bookto31.com"
+BASE_URL = get_base_url("bookto31")
 
 # bookto31 전용 FlareSolverr 세션 (rate_limit=True: 8분 간격)
 _fs = FlareSolverrSession(rate_limit=True)

@@ -4,6 +4,17 @@
 
 ## 2026-09-09 (최신)
 
+### Admin ETA 소스 인지 수정 (예상 완료 시간 정확화)
+- **문제**: ETA가 과거 bookto31 수집 속도(collected_at 간격 ~400초) 기준 → toki31 전환 후에도
+  "3일/5일"로 표시 (오늘만·화산은 toki31 큐인데 bookto31 속도로 계산)
+- **수정** (`routers/pipeline.py`):
+  - `_estimate_seconds_per_chapter(novel_dir, source)`: 큐의 source 반영
+    - toki31 → 측정값 상한 60초 (fallback 30초), bookto31 → 상한 3600초 (fallback 300초)
+  - `get_novel_status`: **큐 순서(FIFO) 반영 ETA** — 앞 소설의 대기 회차까지 다 받아야
+    다음 소설이 시작되므로 누적 계산 (예: 오늘만 = 게임+화산+오늘만 모두 받는 시간)
+  - queue 1회 로드 (기존 반복 로드 제거), TTL 캐시 키에 source 포함
+- **결과**: 게임 ~3시간, 화산 ~1일9시간, 오늘만 ~1일20시간 (기존 3일/5일 → 수배 단축 표시)
+
 ### toki31 일괄 수집 전환 (bookto31 → toki31)
 - **배경**: bookto31은 Cloudflare rate limit(1화/5~8분) → 3,150화 ≈ 11일 소요
 - **toki31 전환**: 3개 소설(게임/화산/오늘만) 에피소드 맵(화수→episode_id) 수집 후 큐 재구성

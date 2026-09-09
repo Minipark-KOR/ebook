@@ -47,25 +47,28 @@ QUEUE_FILE = WATCHER_DIR / "queue.json"
 # URL 파싱 — source + ID 자동 분기
 # ============================================================
 
-URL_PATTERNS = [
-    # bookto31: .../bbs/board.php?bo_table=novel&wr_id=25575
-    (r"bookto31\.com.*wr_id=(\d+)", "bookto31"),
-    # newtoki/toki31: .../novel/58455
-    (r"(?:newtoki|toki)\w*\.com/novel/(\d+)", "newtoki"),
-]
-
-
 def parse_url(url: str) -> Tuple[Optional[str], Optional[str]]:
     """URL에서 source와 ID 추출.
 
+    소스 레지스트리(sources.json)의 domains로 매칭.
+    각 소스별 ID 추출 패턴은 소스 특성에 따라 분기:
+      - bookto31(GNUBOARD): wr_id=N
+      - toki31(newtoki): /novel/{id}
     Returns:
         (source, id) 또는 (None, None)
     """
-    for pat, source in URL_PATTERNS:
-        m = re.search(pat, url)
-        if m:
-            return source, m.group(1)
-    return None, None
+    from lib.sources import get_source_from_url, get_discover
+
+    source = get_source_from_url(url)
+    if not source:
+        return None, None
+    discover = get_discover(source)
+    if discover == "toki31_episodes":
+        m = re.search(r"/novel/(\d+)", url)
+        return (source, m.group(1)) if m else (None, None)
+    # 기본 GNUBOARD (bookto31 계열): wr_id=N
+    m = re.search(r"wr_id=(\d+)", url)
+    return (source, m.group(1)) if m else (None, None)
 
 
 # ============================================================
@@ -193,17 +196,20 @@ _ETA_CACHE: dict = {}
 _ETA_CACHE_TS: dict = {}
 
 
-def _estimate_seconds_per_chapter(novel_dir: Path, fallback: int = 300) -> int:
-    """최근 수집 간격으로 '챕터당 소요시간(초)' 추정.
+def _estimate_seconds_per_chapter(novel_dir: Path, source: str = "bookto31") -> int:
+    """'챕터당 소요시간(초)' 추정 — 수집 소스 기준.
 
-    최근 5개 챕터의 collected_at 간격 평균. 데이터 없으면 fallback.
-    bookto31은 적응형 딜레이(300~600초), toki31은 5~60초.
+    최근 6개 챕터의 collected_at 간격 평균을 측정하되, 큐의 source를 반영해 상한을 적용한다.
+    - toki31: 브라우저+프록시 ~15~40초/화 → 상한 60초 (fallback 30)
+    - bookto31: Cloudflare rate limit 300~600초 → 상한 3600 (fallback 300)
+    이전 bookto31 시절 파일이 섞여 있어도, 앞으로 toki31로 받을 거라면 toki31 속도로 계산해야 한다.
 
     TTL 캐시(60초): /pipeline/status가 3초마다 폴링하므로 파일 전체 읽기를 줄인다.
     """
+    key = f"{novel_dir.name}:{source}"
     now = time.time()
-    if now - _ETA_CACHE_TS.get(novel_dir.name, 0) < 60:
-        return _ETA_CACHE.get(novel_dir.name, fallback)
+    if now - _ETA_CACHE_TS.get(key, 0) < 60:
+        return _ETA_CACHE.get(key, 30 if source == "toki31" else 300)
     stamps = []
     for f in novel_dir.glob("*.json"):
         if f.name in ("meta.json", "_chapters_index.json") or not f.stem.isdigit():
@@ -218,7 +224,7 @@ def _estimate_seconds_per_chapter(novel_dir: Path, fallback: int = 300) -> int:
                 stamps.append(t)
         except Exception:
             continue
-    result = fallback
+    measured = None
     if len(stamps) >= 2:
         stamps.sort()
         from datetime import datetime
@@ -230,11 +236,17 @@ def _estimate_seconds_per_chapter(novel_dir: Path, fallback: int = 300) -> int:
             ]
             gaps = [g for g in gaps if g > 0]
             if gaps:
-                result = int(max(10, min(sum(gaps) / len(gaps), 3600)))
+                measured = sum(gaps) / len(gaps)
         except Exception:
             pass
-    _ETA_CACHE[novel_dir.name] = result
-    _ETA_CACHE_TS[novel_dir.name] = now
+    if source == "toki31":
+        result = measured if measured is not None else 30
+        result = int(max(10, min(result, 60)))
+    else:
+        result = measured if measured is not None else 300
+        result = int(max(10, min(result, 3600)))
+    _ETA_CACHE[key] = result
+    _ETA_CACHE_TS[key] = now
     return result
 
 
@@ -243,22 +255,46 @@ def get_novel_status() -> list[dict]:
 
     - collection_done: queue가 비어 있고 saved == total (수집 작업 완료)
     - status: 완결/연재중/단편 (메타데이터 기반 + fallback 추론)
-    - eta_seconds: 수집 중(collection_done=False)일 때 남은 예상 시간(초)
+    - eta_seconds: 수집 중일 때 남은 예상 시간(초). 큐 순서(FIFO) 반영.
+      예: 화산귀환 앞에 게임이 queue에 있으면 게임까지 다 받은 뒤 화산이 끝난다.
     """
     novels = []
     try:
         if not NOVELS_DIR.exists():
             return novels
-        # queue에 남아있는 작품명 목록
-        queued_titles = set()
+        # queue 1회 로드
+        queue_items = []
         if QUEUE_FILE.exists():
             try:
                 with open(QUEUE_FILE, encoding="utf-8") as f:
-                    for item in json.load(f):
-                        if item.get("novel_title"):
-                            queued_titles.add(item["novel_title"])
+                    queue_items = json.load(f)
             except Exception:
-                pass
+                queue_items = []
+        queued_titles = {it.get("novel_title") for it in queue_items if it.get("novel_title")}
+
+        # 큐 순서로 소설별 대기 수 + 소스 (FIFO 처리 반영)
+        from collections import OrderedDict
+        novel_q = OrderedDict()
+        for it in queue_items:
+            t = it.get("novel_title")
+            if not t:
+                continue
+            info = novel_q.setdefault(t, {"count": 0, "source": it.get("source", "bookto31")})
+            info["count"] += 1
+
+        # 큐 순서 누적 ETA (앞 소설까지 다 받아야 뒤 소설 시작)
+        cumulative = 0.0
+        eta_by_title: dict = {}
+        for t, info in novel_q.items():
+            novel_dir = None
+            for cand in NOVELS_DIR.iterdir():
+                if cand.is_dir() and not cand.name.startswith(".") and cand.name.replace("_", " ") == t:
+                    novel_dir = cand
+                    break
+            per = _estimate_seconds_per_chapter(novel_dir, source=info["source"]) if novel_dir else 30
+            cumulative += info["count"] * per
+            eta_by_title[t] = int(cumulative)
+
         for novel_dir in sorted(NOVELS_DIR.iterdir()):
             if not novel_dir.is_dir() or novel_dir.name.startswith("."):
                 continue
@@ -279,25 +315,13 @@ def get_novel_status() -> list[dict]:
             title = meta.get("title") or novel_dir.name.replace("_", " ")
             status = resolve_status(meta, novel_dir)
             queued = title in queued_titles
-            # totalChapters가 부정확(1 등)하거나, queue에 회차가 있으면
-            # 실제 대상 회차 수 = 저장된 수 + 큐 대기 수로 계산
             meta_total = meta.get("totalChapters") or 0
-            q_count = 0
-            if queued and QUEUE_FILE.exists():
-                try:
-                    with open(QUEUE_FILE, encoding="utf-8") as f:
-                        q_count = sum(1 for it in json.load(f) if it.get("novel_title") == title)
-                except Exception:
-                    pass
+            q_count = novel_q.get(title, {}).get("count", 0)
             if queued:
                 total = saved + q_count
             else:
                 total = meta_total if meta_total >= saved else saved
             collection_done = (not queued) and (total > 0) and (saved >= total)
-            eta_seconds = None
-            if not collection_done and q_count > 0:
-                per = _estimate_seconds_per_chapter(novel_dir)
-                eta_seconds = q_count * per
             novels.append({
                 "id": novel_dir.name,
                 "title": title,
@@ -306,7 +330,7 @@ def get_novel_status() -> list[dict]:
                 "status": status,
                 "queued": queued,
                 "collection_done": collection_done,
-                "eta_seconds": eta_seconds,
+                "eta_seconds": eta_by_title.get(title) if not collection_done else None,
             })
     except Exception as e:
         log.warning(f"novel status 조회 실패: {e}")

@@ -196,15 +196,17 @@ def run_discover(wr_id: int, novel_title: str = "", max_pages: int = 50, source:
     """
     from services.bookto31 import extract_chapter_wr_ids_from_index
     from lib.flaresolverr_client import FlareSolverrSession
+    from lib.sources import get_base_url
 
     fs = FlareSolverrSession(rate_limit=False)
+    base = get_base_url(source)
     all_chapters = []
     seen = set()
     title = ""
 
     # dry_run: 첫 페이지만 fetch해서 제목 추출
     if dry_run:
-        url = f"https://bookto31.com/bbs/board.php?bo_table=novel&wr_id={wr_id}&epage=1"
+        url = f"{base}/bbs/board.php?bo_table=novel&wr_id={wr_id}&epage=1"
         html = fs.fetch(url)
         if html:
             import re as _re
@@ -227,7 +229,7 @@ def run_discover(wr_id: int, novel_title: str = "", max_pages: int = 50, source:
         page_seen = set()
         no_new_count = 0
         for page in range(1, max_pages + 1):
-            url = f"https://bookto31.com/bbs/board.php?bo_table=novel&wr_id={wr_id}&{page_param}={page}"
+            url = f"{base}/bbs/board.php?bo_table=novel&wr_id={wr_id}&{page_param}={page}"
             html = fs.fetch(url)
 
             # 첫 페이지에서 제목 추출
@@ -290,7 +292,7 @@ def run_discover(wr_id: int, novel_title: str = "", max_pages: int = 50, source:
             log.warning(f"  wr_id={wr_id}로 회차 발견 실패 → 저장된 챕터 wr_id={saved_wr}로 재시도")
             for page_param in ("epage", "spage"):
                 for page in range(1, min(max_pages, 200) + 1):
-                    url = f"https://bookto31.com/bbs/board.php?bo_table=novel&wr_id={saved_wr}&{page_param}={page}"
+                    url = f"{base}/bbs/board.php?bo_table=novel&wr_id={saved_wr}&{page_param}={page}"
                     html = fs.fetch(url)
                     if not html or len(html) < 1000:
                         break
@@ -477,15 +479,17 @@ def _run_collect_locked(limit: int = 0, source_filter: str = "") -> dict:
         if novel_title:
             touched_novels[novel_title.replace(' ', '_').replace('/', '_')] = novel_title
 
-        # 다음 챕터 전 대기 — 적응형 딜레이 (업계 표준: 10 × fetch 시간)
-        # bookto31: Cloudflare 차단 방지 위해 최소 5분 / 최대 10분
-        # toki31: 한번에 다 받는 형식이라 짧게 (5~60초)
-        if len(queue) > 0 and limit != 1:
-            if source == "toki31":
-                delay = max(5.0, min(60.0, fetch_elapsed * 10))
+        # 다음 챕터 전 대기 — 소스별 적응형 딜레이 (업계 표준: 10 × fetch 시간)
+        # 속도는 sources.json의 speed_hint_sec 기준: fast(toki31 등) 5~60초, slow(bookto31 등) 300~600초
+        # loop(limit=1)에서도 적용 → 다중 소스를 순서대로 수집해도 소스별 페이싱이 유지된다.
+        if len(queue) > 0:
+            from lib.sources import get_speed_hint
+            hint = get_speed_hint(source)
+            if hint <= 60:
+                delay = max(5.0, min(float(hint), fetch_elapsed * 10))
             else:
-                delay = max(300.0, min(600.0, fetch_elapsed * 10))
-            log.info(f"  {delay:.0f}초 대기 (fetch {fetch_elapsed:.1f}s × 10)...")
+                delay = max(float(hint), min(float(hint) * 2, fetch_elapsed * 10))
+            log.info(f"  {delay:.0f}초 대기 (fetch {fetch_elapsed:.1f}s × 10, source={source})...")
             time.sleep(delay)
 
     # 전체 queue에서 처리/실패 제거된 항목만 제거하고 저장
@@ -982,32 +986,31 @@ def main():
         PID_FILE.write_text(str(os.getpid()))
         cycle = 0
         last_discover_day = None  # 이번 달에 discover 실행했는지 추적
-        # 사이클 간 대기: bookto31은 300초(Cloudflare), toki31은 짧게(내부 딜레이가 페이싱)
-        cycle_delay = 300 if source == "bookto31" else 5
+        # 다중 소스: 사이클 대기는 짧게, 소스별 페이싱은 run_collect 내부 딜레이가 담당
+        cycle_delay = 5
         try:
             while True:
                 cycle += 1
                 log.info(f"\n--- Cycle {cycle} ---")
-                _write_status({"phase": "loop", "cycle": cycle, "source": source})
+                _write_status({"phase": "loop", "cycle": cycle, "source": source or "all"})
                 # systemd watchdog 신호 (WatchdogSec 대응)
                 _sd_notify(f"cycle {cycle}")
 
-                # bookto31: 매월 1일 1회 연재작 새 회차 감지 (discover)
+                # 매월 1일 1회 연재작 새 회차 감지 (등록된 모든 소스)
                 today = datetime.now().strftime("%Y-%m")
-                if source == "bookto31" and today != last_discover_day:
+                if today != last_discover_day:
                     if datetime.now().day == 1:
                         last_discover_day = today
                         log.info("discover: 매월 1일 연재작 새 회차 확인")
                         try:
-                            _auto_discover(source)
+                            _auto_discover()
                         except Exception as e:
                             log.warning(f"auto-discover 실패: {e}")
                     else:
-                        # 1일이 아니면 이번 달 discover는 아직 안 함
                         pass
 
-                # collect (1개씩, source 필터)
-                result = run_collect(limit=1, source_filter=source)
+                # collect (1개씩, 모든 소스 처리 — 다중 소스)
+                result = run_collect(limit=1)
                 if result['processed'] == 0 and result['remaining'] == 0:
                     if source in ("bookto31", "toki31"):
                         # 연재작: queue가 비어도 계속 대기 (새 회차 추가 대기)

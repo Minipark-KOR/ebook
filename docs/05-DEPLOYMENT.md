@@ -82,6 +82,16 @@ setsid nohup venv/bin/python -m uvicorn main:app --host 0.0.0.0 --port 8089 \
   >> /var/tmp/ebook_backend.log 2>&1 < /dev/null &
 ```
 
+### venv 필수 의존성 (toki31 수집용)
+
+```bash
+cd /opt/workspace/ebooklib/apps/backend
+venv/bin/pip install playwright cryptography
+```
+
+> `playwright` + `cryptography`(AES-GCM)가 없으면 toki31 수집이 **즉시 실패**(body=0)한다.
+> Playwright 브라우저 바이너리는 `~/.cache/ms-playwright`에 이미 존재.
+
 ### 2. 외부 노출 (Caddy)
 
 - Caddy가 `devforge.152-69-229-246.nip.io` → `127.0.0.1:8089` 리버스 프록시
@@ -273,7 +283,8 @@ Wants=network-online.target
 Type=notify                                                        # sd_notify (READY=1 + WATCHDOG=1)
 EnvironmentFile=/home/opc/.config/devforge/secrets.env
 WorkingDirectory=/opt/workspace/ebooklib
-ExecStart=/opt/workspace/ebooklib/apps/backend/venv/bin/python3 /opt/workspace/ebooklib/scripts/pipeline.py loop --source bookto31
+# --source: 현재 toki31 (대량 수집). bookto31 전환 시 변경.
+ExecStart=/opt/workspace/ebooklib/apps/backend/venv/bin/python3 /opt/workspace/ebooklib/scripts/pipeline.py loop --source toki31
 WatchdogSec=600                                                    # 10분 내 신호 없으면 hang
 Restart=on-watchdog                                                # hang/실패 시 재시작
 RestartSec=30

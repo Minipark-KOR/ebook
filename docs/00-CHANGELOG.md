@@ -4,6 +4,19 @@
 
 ## 2026-09-09 (최신)
 
+### toki31 일괄 수집 전환 (bookto31 → toki31)
+- **배경**: bookto31은 Cloudflare rate limit(1화/5~8분) → 3,150화 ≈ 11일 소요
+- **toki31 전환**: 3개 소설(게임/화산/오늘만) 에피소드 맵(화수→episode_id) 수집 후 큐 재구성
+  - toki31이 화수도 더 많음: 게임 934, 화산 1,945, 오늘만 1,025 (bookto31 대비 +37/+23/+186)
+  - **~15~30초/화** → 전체 ≈ **17시간** (bookto31 11일 대비 15배)
+- **episode_id ≠ bookto31 wr_id**: toki31의 episode_id는 완전히 다른 체계 → 에피소드 맵으로 매핑
+  - 새 파일은 `{toki31_episode_id}.json`으로 저장, 기존 bookto31 파일과 혼재 (chapter 번호 정렬로 정상)
+- **루프 개선**:
+  - `--source toki31` 루프 (사이클 대기 300초→5초, 내부 딜레이 스킵 → 고속)
+  - `--source`가 novel_title로 잘못 들어가던 버그 수정 (위치 인자만 title)
+- **의존성**: venv에 `playwright`, `cryptography` 설치 누락 → toki31 수집 즉시 실패하던 버그 수정
+- **IP 회전 확인**: 매 세션 다른 한국 ISP IP (DataImpulse __cr.kr) → IP 차단 무력화, 병렬은 collect 락 직렬화로 보류
+
 ### discover 재발 방지 패치 (회차 누락 예방)
 - **원인 확인**: 잘못된 main_wr_id(예: 게임=42424)로 discover하면 bookto31 페이지에
   **에피소드 셀렉트가 0개** → `extract_chapter_wr_ids_from_index` 빈 결과 → 즉시 중단, 초반부 누락

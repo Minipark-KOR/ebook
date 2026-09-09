@@ -100,6 +100,9 @@ COLLECTORS = {
 }
 ```
 
+> **2026-09-09부터 대량 수집은 toki31 우선**: bookto31은 1화/5~8분(Cloudflare),
+> toki31은 1화/15~30초(유동 IP 회전 + AES-GCM API). 상세는 [01-DATA-PIPELINE.md](01-DATA-PIPELINE.md).
+
 ### 파이프라인 시작 경로
 
 ```

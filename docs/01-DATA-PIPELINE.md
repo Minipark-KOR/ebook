@@ -56,8 +56,16 @@ python3 scripts/pipeline.py revalidate "오늘만 사는 기사"
 
 | source | collector | 방법 | 속도 |
 |--------|-----------|------|------|
-| `bookto31` | `_collect_bookto31()` | FlareSolverr + HTML 파싱 | 5분/챕터 |
-| `newtoki` | `_collect_newtoki()` | Playwright + AES-GCM 복호화 | ~30초/챕터 |
+| `bookto31` | `_collect_bookto31()` | FlareSolverr + HTML 파싱 | 5~8분/챕터 (Cloudflare rate limit) |
+| `newtoki`/`toki31` | `_collect_newtoki()` | Playwright + AES-GCM 복호화 | **15~30초/챕터** |
+
+> **2026-09-09부터 대량 수집은 toki31 우선** (bookto31은 1화/5~8분이라 3,000화면 ~11일).
+> toki31은 유동 IP(DataImpulse KR 회전)라 IP 차단 무력화 → 고속 수집 가능.
+
+**toki31 에피소드 매핑**: toki31의 episode_id는 bookto31 wr_id와 **다른 체계**.
+- 사전에 toki31 에피소드 맵(화수→episode_id)을 수집해야 함 (e.g. `/novel/{id}` 페이지 + "이전 회차 더 보기" 페이징)
+- 큐 항목: `wr_id = toki31 episode_id`, `novel_ref = toki31 novel_id`, `chapter = 화수`
+- 저장 파일명은 `{toki31 episode_id}.json` — 기존 bookto31 파일과 혼재되지만 chapter 번호 정렬로 정상 표시
 
 **bookto31 수집기**:
 ```python
@@ -72,6 +80,7 @@ chapter_num = _extract_chapter_from_html(html) # "<title>제목 - 839화</title>
 # lib/toki31_playwright.py 사용
 result = await fetch_chapter_content_full(novel_id, episode_id)
 # Playwright 브라우저가 ad/ack 처리 → API 응답 인터셉트 → AES-GCM 복호화
+# (venv에 playwright + cryptography 필요)
 ```
 
 ### Step 3: enrich
@@ -179,15 +188,22 @@ def get_chapter_list(novel_id, page=1, limit=20):
 
 ```json
 {
-  "wr_id": 26400,
-  "novel_title": "오늘만 사는 기사",
-  "chapter": 821,
-  "source": "bookto31",
-  "priority": 5,
-  "added_at": "2026-09-07T...",
+  "wr_id": 7240583,
+  "episode_id": 7240583,
+  "novel_title": "게임 속 바바리안으로 살아남기",
+  "chapter": 934,
+  "source": "toki31",
+  "novel_ref": "20",
+  "priority": 1,
+  "added_at": "2026-09-09T...",
   "attempts": 0,
   "last_error": null
 }
+```
+
+- `wr_id`: 저장 파일명/식별자 (toki31이면 episode_id, bookto31이면 GNUBOARD wr_id)
+- `episode_id`: toki31 fetch용 (bookto31 wr_id와 다름)
+- `novel_ref`: toki31 novel_id (`/novel/{novel_id}`) — bookto31에는 없음
 ```
 
 ## 다음 문서

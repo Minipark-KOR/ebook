@@ -966,11 +966,14 @@ def main():
     elif cmd == "loop":
         """collect → index → revalidate 무한 루프 (5분 간격).
 
-        bookto31: 연재작 특성상 queue가 비어도 종료하지 않고 대기한다.
-                  (URL/discover로 회차가 추가되면 계속 수집)
-        newtoki/완결작: queue 소진 시 루프 종료.
+        bookto31/toki31: 연재작 특성상 queue가 비어도 종료하지 않고 대기한다.
+        (URL/discover로 회차가 추가되면 계속 수집)
         """
-        novel_title = sys.argv[2] if len(sys.argv) > 2 else None
+        # novel_title은 --source 같은 플래그가 아닌 위치 인자만
+        novel_title = None
+        positional = [a for a in sys.argv[2:] if not a.startswith("--")]
+        if positional:
+            novel_title = positional[0]
         source = _parse_source()
         log.info("=" * 50)
         log.info(f"파이프라인 루프 시작 (source={source}, novel={novel_title or '전체'}, Ctrl+C로 중단)")
@@ -979,6 +982,8 @@ def main():
         PID_FILE.write_text(str(os.getpid()))
         cycle = 0
         last_discover_day = None  # 이번 달에 discover 실행했는지 추적
+        # 사이클 간 대기: bookto31은 300초(Cloudflare), toki31은 짧게(내부 딜레이가 페이싱)
+        cycle_delay = 300 if source == "bookto31" else 5
         try:
             while True:
                 cycle += 1
@@ -1004,11 +1009,11 @@ def main():
                 # collect (1개씩, source 필터)
                 result = run_collect(limit=1, source_filter=source)
                 if result['processed'] == 0 and result['remaining'] == 0:
-                    if source == "bookto31":
-                        # bookto31 연재작: queue가 비어도 계속 대기 (새 회차 추가 대기)
-                        log.info("큐 비어 있음 - bookto31은 새 회차 대기 중")
-                        log.info(f"  {CHAPTER_DELAY_SEC}초 대기...")
-                        time.sleep(CHAPTER_DELAY_SEC)
+                    if source in ("bookto31", "toki31"):
+                        # 연재작: queue가 비어도 계속 대기 (새 회차 추가 대기)
+                        log.info(f"큐 비어 있음 - {source}은 새 회차 대기 중")
+                        log.info(f"  {cycle_delay}초 대기...")
+                        time.sleep(cycle_delay)
                         continue
                     log.info("큐 비어 있음, 루프 종료")
                     break
@@ -1023,19 +1028,19 @@ def main():
 
                 log.info(f"--- Cycle {cycle} 완료 (남은 작업: {result['remaining']}) ---")
 
-                # 큐가 비었으면 종료 (newtoki/완결작만)
+                # 큐가 비었으면 종료 (완결작만)
                 remaining = _load_queue()
                 if not remaining:
-                    if source == "bookto31":
-                        log.info("bookto31: 모든 회차 수집 완료, 새 회차 대기 중")
-                        log.info(f"  {CHAPTER_DELAY_SEC}초 대기...")
-                        time.sleep(CHAPTER_DELAY_SEC)
+                    if source in ("bookto31", "toki31"):
+                        log.info(f"{source}: 모든 회차 수집 완료, 새 회차 대기 중")
+                        log.info(f"  {cycle_delay}초 대기...")
+                        time.sleep(cycle_delay)
                         continue
                     log.info("모든 작업 완료, 루프 종료")
                     break
 
-                log.info(f"  {CHAPTER_DELAY_SEC}초 대기...")
-                time.sleep(CHAPTER_DELAY_SEC)
+                log.info(f"  {cycle_delay}초 대기...")
+                time.sleep(cycle_delay)
         except KeyboardInterrupt:
             log.info("루프 중단 (사용자 요청)")
 

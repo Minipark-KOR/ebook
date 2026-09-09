@@ -16,29 +16,37 @@ ebook-watcher.service            ← Type=notify, WatchdogSec=600, Restart=on-wa
 
 ## 1. 파이프라인 루프 (pipeline.py loop)
 
-**상시 실행**되는 프로세스로, 5분 간격으로 챕터를 수집합니다.
+**상시 실행**되는 프로세스로, 큐를 1개씩 소비하며 챕터를 수집합니다.
+
+### 사이클 주기 (source별)
+
+| source | 사이클 대기 | 챕터당 소요 |
+|---|---|---|
+| `bookto31` | 300초 (Cloudflare 보호) | 5~8분 |
+| `toki31` | 5초 (내부 딜레이 스킵) | **15~30초** |
+
+> 2026-09-09부터 대량 수집은 `--source toki31`로 실행 중 (유동 IP 회전 → IP 차단 무력화).
 
 ### 실행 흐름
 
 ```
-1 Cycle (5분):
+1 Cycle:
   ├─ sd_notify (systemd watchdog 신호)
   ├─ collect (1개 챕터)
   │   ├─ bookto31: FlareSolverr → HTML → 본문 추출 (~12초)
-  │   └─ newtoki: Playwright → 복호화 (~30초)
-  ├─ index (_chapters_index.json 재구축)
-  ├─ revalidate (Vercel ISR 캐시 갱신)
-  └─ 적응형 대기 (10×fetch 시간, bookto31 최소 300초)
+  │   └─ toki31: Playwright + KR 프록시 → API 복호화 (~15~30초)
+  ├─ EPUB 제작 훅 (해당 소설 queue가 비워진 경우)
+  └─ 사이클 대기 (bookto31 300초 / toki31 5초)
 ```
 
 ### 시작 방법
 
 ```bash
-# systemd 서비스로 (권장)
+# systemd 서비스로 (권장) — 현재 toki31 루프
 systemctl --user start ebook-watcher.service
 
 # CLI 직접 (NOTIFY_SOCKET 없으면 sd_notify 자동 무시)
-python3 scripts/pipeline.py loop --source bookto31
+python3 scripts/pipeline.py loop --source toki31
 ```
 
 ## 2. devforge-watchdog
@@ -103,7 +111,7 @@ Wants=network-online.target
 Type=notify                                                        # sd_notify (READY=1 + WATCHDOG=1)
 EnvironmentFile=/home/opc/.config/devforge/secrets.env
 WorkingDirectory=/opt/workspace/ebooklib
-ExecStart=.../venv/bin/python3 .../scripts/pipeline.py loop --source bookto31
+ExecStart=.../venv/bin/python3 .../scripts/pipeline.py loop --source toki31
 WatchdogSec=600                                                    # 10분 내 신호 없으면 hang
 Restart=on-watchdog                                                # hang/실패 시 재시작
 RestartSec=30                                                      # 30초 후 재시도
@@ -122,9 +130,10 @@ StandardError=journal
 
 | 장치 | 작동 |
 |---|---|
-| **챕터 간 적응형 지연** | 10×fetch 시간, bookto31 최소 5분 / toki31 5~60초 |
+| **챕터 간 적응형 지연** | 10×fetch 시간, bookto31 최소 5분 / toki31 5~60초 (loop limit=1 모드에선 외부 사이클 대기로 페이싱) |
 | **재시도 3회** | 같은 URL에 대한 빠른 반복 요청 방지 |
-| **rate_limiter DB** | URL별 마지막 요청 시각 기록, 8분 + ±2분 jitter |
+| **rate_limiter DB** | URL별 마지막 요청 시각 기록, 8분 + ±2분 jitter (bookto31) |
+| **유동 IP 회전 (toki31)** | DataImpulse `__cr.kr` — 매 브라우저 세션 새 IP → IP 차단 무력화 |
 | **FlareSolverr session 재사용** | 매번 새 세션 만들면 부담, 같은 세션으로 효율화 |
 | **3회 실패 시 DLQ 기록** | failed.json에 보존 (데이터 손실 방지, 최대 5000개) |
 

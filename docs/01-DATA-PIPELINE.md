@@ -24,20 +24,22 @@
 ### Admin 페이지 (권장)
 - URL: `https://miniebook.vercel.app/admin`
 - 비밀번호 입력 + URL 붙여넣기
-- 자동 분기: bookto31.com → bookto31, toki31.com → newtoki
-- 제목 자동 추출 → 큐 등록 → 루프 시작
+- 자동 분기: **소스 레지스트리(`sources.json`)의 domains로 URL 매칭** → source/ID 추출
+  - bookto31.com → bookto31, toki31.com/newtoki31.com → toki31, 그 외 등록 도메인
+- 제목 자동 추출 → 큐 등록 → 루프 시작 (루프는 소스 무관, 모든 소스 수집)
 
 ### CLI
 ```bash
 # 전체 체인 (신규 소설)
 python3 scripts/pipeline.py all 25575 "오늘만 사는 기사"
 
-# 무한 루프 (기존 소설)
-python3 scripts/pipeline.py loop "오늘만 사는 기사"
+# 무한 루프 (다중 소스 — 모든 소스 수집)
+python3 scripts/pipeline.py loop
 
 # 단계별
 python3 scripts/pipeline.py discover 25575 "오늘만 사는 기사" --source bookto31
-python3 scripts/pipeline.py collect --limit 1 --source bookto31
+python3 scripts/pipeline.py discover 58455 "아포칼립스의 고인물" --source toki31
+python3 scripts/pipeline.py collect --limit 1
 python3 scripts/pipeline.py enrich "오늘만 사는 기사"
 python3 scripts/pipeline.py index
 python3 scripts/pipeline.py revalidate "오늘만 사는 기사"
@@ -45,21 +47,41 @@ python3 scripts/pipeline.py revalidate "오늘만 사는 기사"
 
 ## 2. 파이프라인 단계
 
-### Step 1: discover
-- 작품 메인 페이지에서 GNUBOARD5 spage 순회
-- 모든 회차의 wr_id + chapter 번호 추출 → `queue.json`에 등록
+### Step 0: 소스 레지스트리 (`sources.json`)
+
+`apps/backend/sources.json`에 소스를 등록 — 코드 수정 없이 추가/도메인 변경 가능:
+
+```json
+{
+  "bookto31": { "domains": ["bookto31.com"], "base_url": "https://bookto31.com",
+                "collector": "bookto31", "discover": "gnuboard", "speed_hint_sec": 300 },
+  "toki31":   { "domains": ["toki31.com", "newtoki31.com"], "base_url": "https://toki31.com",
+                "collector": "toki31", "discover": "toki31_episodes", "speed_hint_sec": 5 }
+}
+```
+
+- `domains`: URL 매칭, `base_url`: 크롤링 주소 (도메인 변경 시 여기만 수정), `collector`: 수집기 키,
+  `discover`: 발견 전략(gnuboard/toki31_episodes/...), `speed_hint_sec`: 수집 딜레이/ETA 기준
+- 도메인이 바뀌면(북토끼가 bookto42.com으로) `domains`/`base_url`만 수정
+
+### Step 1: discover (소스별 전략 분기)
+
+`run_discover`가 `get_discover(source)`로 전략 라우팅:
+- **gnuboard**(bookto31 계열): 작품 메인 GNUBOARD5 spage 순회 → wr_id+chapter 추출
+- **toki31_episodes**: 에피소드 목록(화수→episode_id) 페이지네이션 → 큐 등록
 - `--dry-run` 모드로 제목만 추출 가능
 
 ### Step 2: collect (source별 분기)
 
 큐 아이템의 `source` 필드에 따라 collector 자동 선택:
 
-| source | collector | 방법 | 속도 |
+| source | collector | 방법 | 속도 (speed_hint) |
 |--------|-----------|------|------|
-| `bookto31` | `_collect_bookto31()` | FlareSolverr + HTML 파싱 | 5~8분/챕터 (Cloudflare rate limit) |
-| `newtoki`/`toki31` | `_collect_newtoki()` | Playwright + AES-GCM 복호화 | **15~30초/챕터** |
+| `bookto31` | `_collect_bookto31()` | FlareSolverr + HTML 파싱 | 5~8분/챕터 (300초) |
+| `toki31` | `_collect_newtoki()` | Playwright + AES-GCM 복호화 | **~18초/챕터 (5초)** |
 
-> **2026-09-09부터 대량 수집은 toki31 우선** (bookto31은 1화/5~8분이라 3,000화면 ~11일).
+> **루프는 다중 소스 처리**: 모든 소스의 큐 항목을 순서대로 수집. 소스별 페이싱은
+> `speed_hint_sec` 기반 내부 적응형 딜레이(fast: 5초, slow: 300~600초)가 담당.
 > toki31은 유동 IP(DataImpulse KR 회전)라 IP 차단 무력화 → 고속 수집 가능.
 
 **toki31 에피소드 매핑**: toki31의 episode_id는 bookto31 wr_id와 **다른 체계**.

@@ -199,6 +199,26 @@
 
 **한국어 웹소설은 `brave` 사용 권장**.
 
+## 9. POST /api/pipeline/start
+
+파이프라인 시작 (Admin 페이지용).
+
+**요청 본문**:
+```json
+{ "url": "https://bookto31.com/bbs/board.php?bo_table=novel&wr_id=25575", "password": "..." }
+```
+
+**URL → 소스 자동 분기** (소스 레지스트리 `sources.json`의 `domains` 매칭):
+
+| URL | source | ID |
+|---|---|---|
+| `bookto31.com/...wr_id=N` | bookto31 | N |
+| `toki31.com/novel/N` | toki31 | N |
+| `newtoki31.com/novel/N` | toki31 | N |
+| 기타 등록 도메인 | sources.json 기준 | - |
+
+소스가 등록되어 있지 않으면 400.
+
 ## 에러 응답
 
 모든 에러는 다음 형식:

@@ -189,11 +189,161 @@ def _update_novel_status_from_discover(meta: dict, added: int, novel_title: str)
             log.info(f"  ✓ {novel_title}: 2개월 연속 신규 회차 0 → 완결로 판정")
 
 
-def run_discover(wr_id: int, novel_title: str = "", max_pages: int = 50, source: str = "bookto31", dry_run: bool = False) -> int:
-    """북토끼 작품 메인에서 모든 회차 wr_id 발견 → 큐에 추가.
+def discover_toki31(novel_id: int, novel_title: str = "", dry_run: bool = False) -> int:
+    """toki31 소설의 전체 에피소드를 발견해 큐에 추가.
 
+    novel_id: toki31 /novel/{novel_id}
+    소스가 아닌 에피소드 목록 API(페이지네이션) 기반으로 (화수 → episode_id) 맵을 만든 뒤,
+    저장되지 않은 에피소드를 wr_id=episode_id, source=toki31, novel_ref=novel_id로 큐잉한다.
+    """
+    import asyncio as _asyncio
+    from lib.toki31_playwright import _load_proxy_env, TOKI31_BASE
+
+    UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+          "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36")
+
+    def _fetch_episodes(only_title: bool = False):
+        env = _load_proxy_env()
+        proxy_user = env.get("DATAIMPULSE_USER", "") or env.get("MASKPROXY_USER", "")
+        proxy_pass = env.get("DATAIMPULSE_PASS", "") or env.get("MASKPROXY_PASS", "")
+        proxy_host = env.get("DATAIMPULSE_HOST", "") or env.get("MASKPROXY_HOST", "")
+        proxy_port = env.get("DATAIMPULSE_PORT", "") or env.get("MASKPROXY_PORT", "")
+        if "dataimpulse" in proxy_host and "__cr." not in proxy_user:
+            proxy_user = proxy_user + "__cr.kr"
+        if not proxy_user or not proxy_pass:
+            log.warning("toki31 discover: 프록시 자격증명 없음 (.env.local)")
+            return "", {}
+        proxy_url = "http://{}:{}".format(proxy_host, proxy_port)
+
+        async def _run():
+            from playwright.async_api import async_playwright
+            async with async_playwright() as p:
+                b = await p.chromium.launch(headless=True,
+                    proxy={"server": proxy_url, "username": proxy_user, "password": proxy_pass})
+                c = await b.new_context(user_agent=UA, locale="ko-KR")
+                pg = await c.new_page()
+                await pg.goto("{}/novel/{}".format(TOKI31_BASE, novel_id), wait_until="domcontentloaded", timeout=60000)
+                await pg.wait_for_timeout(2500)
+                title = (await pg.title()).split("|")[0].strip()
+                if only_title:
+                    await b.close()
+                    return title, {}
+                eps: dict = {}
+                def _collect():
+                    return pg.eval_on_selector_all("li.novel-ep-row",
+                        "els=>els.map(e=>({ep:parseInt(e.getAttribute('data-ep')), id:e.getAttribute('data-episode-id')}))")
+                dom = await _collect()
+                for e in dom:
+                    eps[e["ep"]] = e["id"]
+                guard = 0
+                while guard < 40:
+                    btn = pg.locator("button:has-text('이전 회차 더 보기')")
+                    if await btn.count() == 0:
+                        break
+                    try:
+                        await btn.click(timeout=8000)
+                    except Exception:
+                        break
+                    await pg.wait_for_timeout(2000)
+                    dom = await _collect()
+                    before = len(eps)
+                    for e in dom:
+                        eps[e["ep"]] = e["id"]
+                    if len(eps) == before:
+                        break
+                    guard += 1
+                await b.close()
+                return title, eps
+
+        return _asyncio.run(_run())
+
+    if dry_run:
+        try:
+            title, _ = _fetch_episodes(only_title=True)
+        except Exception:
+            title = novel_title
+        print("TITLE:{}".format(title or novel_title or "소설 {}".format(novel_id)))
+        return 0
+
+    title, eps = _fetch_episodes()
+    if not eps:
+        log.warning(f"toki31 discover: {novel_id} 에피소드 없음")
+        return 0
+
+    # 큐에 추가 (저장된 화수 제외)
+    queue = _load_queue()
+    existing_ids = {item['wr_id'] for item in queue}
+    novel_id_dir = (title or novel_title).replace(' ', '_').replace('/', '_') if (title or novel_title) else f"novel_{novel_id}"
+    novel_dir = Path('/opt/ai_data/flaresolverr/novels') / novel_id_dir
+    saved = set()
+    if novel_dir.exists():
+        for f in novel_dir.glob("*.json"):
+            if f.name in ("meta.json", "_chapters_index.json"):
+                continue
+            try:
+                j = json.load(open(f, encoding='utf-8'))
+                if isinstance(j.get('chapter'), int):
+                    saved.add(j['chapter'])
+            except Exception:
+                pass
+
+    added = 0
+    for ep, epid in eps.items():
+        e = int(ep)
+        if e in saved:
+            continue
+        if int(epid) in existing_ids:
+            continue
+        queue.append({
+            "wr_id": int(epid),
+            "episode_id": int(epid),
+            "novel_title": title or novel_title,
+            "chapter": e,
+            "source": "toki31",
+            "novel_ref": str(novel_id),
+            "priority": 1 if e >= 800 else 5,
+            "added_at": datetime.now(timezone.utc).isoformat(),
+            "attempts": 0,
+            "last_error": None,
+        })
+        existing_ids.add(int(epid))
+        added += 1
+    _save_queue(queue)
+
+    # meta 기록
+    try:
+        novel_dir.mkdir(parents=True, exist_ok=True)
+        meta_file = novel_dir / 'meta.json'
+        meta = {}
+        if meta_file.exists():
+            try:
+                meta = json.load(open(meta_file, encoding='utf-8'))
+            except Exception:
+                meta = {}
+        meta['main_wr_id'] = novel_id
+        meta['source'] = 'toki31'
+        meta['title'] = title or novel_title
+        _update_novel_status_from_discover(meta, added, title or novel_title)
+        with open(meta_file, 'w', encoding='utf-8') as f:
+            json.dump(meta, f, ensure_ascii=False, indent=2)
+    except Exception as e:
+        log.warning(f"meta 기록 실패: {e}")
+
+    log.info(f"toki31 discover 완료: {added}개 추가 (총 {len(eps)}화)")
+    return added
+
+
+def run_discover(wr_id: int, novel_title: str = "", max_pages: int = 50, source: str = "bookto31", dry_run: bool = False) -> int:
+    """소스별 discover 분기.
+
+    - gnuboard(bookto31 계열): 작품 메인에서 wr_id 발견 → 큐에 추가
+    - toki31_episodes: 에피소드 목록 기반
     dry_run: 첫 페이지만 fetch해서 제목 추출 후 출력하고 종료.
     """
+    from lib.sources import get_discover
+    if get_discover(source) == "toki31_episodes":
+        return discover_toki31(wr_id, novel_title, dry_run=dry_run)
+
     from services.bookto31 import extract_chapter_wr_ids_from_index
     from lib.flaresolverr_client import FlareSolverrSession
     from lib.sources import get_base_url
@@ -837,12 +987,14 @@ def run_all(novel_main_wr_id: int, novel_title: str, source: str = "bookto31") -
     return results
 
 
-def _auto_discover(source: str = "bookto31") -> None:
+def _auto_discover() -> None:
     """저장된 연재작들의 새 회차를 주기적으로 discover.
 
-    meta.json에 기록된 main_wr_id를 읽어 각 작품의 discover를 실행.
-    queue에 없거나 이미 완결인 작품은 스킵.
+    각 소설의 meta.source(등록된 소스)를 읽어 해당 소스의 discover로 새 회차를 찾는다.
+    queue에 없거나 이미 완결인 작품은 스킵. (완결 → 월간 체크 목록에서 제외)
     """
+    from lib.sources import get_discover
+
     novels_dir = Path('/opt/ai_data/flaresolverr/novels')
     if not novels_dir.exists():
         return
@@ -860,6 +1012,11 @@ def _auto_discover(source: str = "bookto31") -> None:
         # 완결작은 새 회차 없음 (월간 체크 목록에서 제외)
         if meta.get('status') == '완결':
             continue
+        source = meta.get('source') or 'bookto31'
+        # 현재 gnuboard(bookto31 계열)만 자동 discover 지원. toki31 등은 에피소드 큐가
+        # 이미 있으므로 스킵 (추후 toki31 discover 모듈 추가 시 활성화).
+        if get_discover(source) != "gnuboard":
+            continue
         main_wr_id = meta.get('main_wr_id')
         title = meta.get('title') or novel_dir.name.replace('_', ' ')
         # main_wr_id가 없거나 잘못됐을 수 있으므로, 기존 챕터에서 유효한 wr_id를 유도.
@@ -873,7 +1030,7 @@ def _auto_discover(source: str = "bookto31") -> None:
                 break
         if not main_wr_id:
             continue
-        log.info(f"  auto-discover: {title} (main_wr_id={main_wr_id})")
+        log.info(f"  auto-discover: {title} (main_wr_id={main_wr_id}, source={source})")
         try:
             added = run_discover(int(main_wr_id), title, max_pages=200, source=source)
             # 신규 회차 발견(queue 추가) 시 그 소설의 메타데이터도 갱신
@@ -987,7 +1144,7 @@ def main():
         cycle = 0
         last_discover_day = None  # 이번 달에 discover 실행했는지 추적
         # 다중 소스: 사이클 대기는 짧게, 소스별 페이싱은 run_collect 내부 딜레이가 담당
-        cycle_delay = 5
+        cycle_delay = 1
         try:
             while True:
                 cycle += 1
@@ -1012,14 +1169,11 @@ def main():
                 # collect (1개씩, 모든 소스 처리 — 다중 소스)
                 result = run_collect(limit=1)
                 if result['processed'] == 0 and result['remaining'] == 0:
-                    if source in ("bookto31", "toki31"):
-                        # 연재작: queue가 비어도 계속 대기 (새 회차 추가 대기)
-                        log.info(f"큐 비어 있음 - {source}은 새 회차 대기 중")
-                        log.info(f"  {cycle_delay}초 대기...")
-                        time.sleep(cycle_delay)
-                        continue
-                    log.info("큐 비어 있음, 루프 종료")
-                    break
+                    # 연재작: queue가 비어도 계속 대기 (새 회차 추가 대기)
+                    log.info("큐 비어 있음 - 새 회차 대기 중")
+                    log.info(f"  {cycle_delay}초 대기...")
+                    time.sleep(cycle_delay)
+                    continue
 
                 # index (해당 소설만)
                 if novel_title:
@@ -1031,16 +1185,13 @@ def main():
 
                 log.info(f"--- Cycle {cycle} 완료 (남은 작업: {result['remaining']}) ---")
 
-                # 큐가 비었으면 종료 (완결작만)
+                # 큐가 비었으면 계속 대기 (연재작)
                 remaining = _load_queue()
                 if not remaining:
-                    if source in ("bookto31", "toki31"):
-                        log.info(f"{source}: 모든 회차 수집 완료, 새 회차 대기 중")
-                        log.info(f"  {cycle_delay}초 대기...")
-                        time.sleep(cycle_delay)
-                        continue
-                    log.info("모든 작업 완료, 루프 종료")
-                    break
+                    log.info("모든 회차 수집 완료, 새 회차 대기 중")
+                    log.info(f"  {cycle_delay}초 대기...")
+                    time.sleep(cycle_delay)
+                    continue
 
                 log.info(f"  {cycle_delay}초 대기...")
                 time.sleep(cycle_delay)

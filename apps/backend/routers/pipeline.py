@@ -199,17 +199,19 @@ _ETA_CACHE_TS: dict = {}
 def _estimate_seconds_per_chapter(novel_dir: Path, source: str = "bookto31") -> int:
     """'챕터당 소요시간(초)' 추정 — 수집 소스 기준.
 
-    최근 6개 챕터의 collected_at 간격 평균을 측정하되, 큐의 source를 반영해 상한을 적용한다.
-    - toki31: 브라우저+프록시 ~15~40초/화 → 상한 60초 (fallback 30)
-    - bookto31: Cloudflare rate limit 300~600초 → 상한 3600 (fallback 300)
-    이전 bookto31 시절 파일이 섞여 있어도, 앞으로 toki31로 받을 거라면 toki31 속도로 계산해야 한다.
+    최근 6개 챕터의 collected_at 간격 평균을 측정하되, 소스의 speed_hint(sources.json)를
+    상한으로 적용한다 (toki31 ~30초, bookto31 ~300초 등). 이전 소스 시절 파일이 섞여 있어도
+    앞으로 받을 소스 속도로 계산해야 하므로 상한을 적용한다.
 
     TTL 캐시(60초): /pipeline/status가 3초마다 폴링하므로 파일 전체 읽기를 줄인다.
     """
+    from lib.sources import get_speed_hint
+
+    hint = get_speed_hint(source)
     key = f"{novel_dir.name}:{source}"
     now = time.time()
     if now - _ETA_CACHE_TS.get(key, 0) < 60:
-        return _ETA_CACHE.get(key, 30 if source == "toki31" else 300)
+        return _ETA_CACHE.get(key, hint)
     stamps = []
     for f in novel_dir.glob("*.json"):
         if f.name in ("meta.json", "_chapters_index.json") or not f.stem.isdigit():
@@ -239,12 +241,13 @@ def _estimate_seconds_per_chapter(novel_dir: Path, source: str = "bookto31") -> 
                 measured = sum(gaps) / len(gaps)
         except Exception:
             pass
-    if source == "toki31":
-        result = measured if measured is not None else 30
-        result = int(max(10, min(result, 60)))
+    if measured is not None:
+        # 측정값이 소스 상한(hint×4)보다 크면(옛 소스 잔재) 상한으로 캡.
+        # hint×4: toki31 ≈ 20초(fetch 12~20 + 딜레이 5), bookto31 ≈ 1200초
+        result = max(10, min(measured, float(hint) * 4))
     else:
-        result = measured if measured is not None else 300
-        result = int(max(10, min(result, 3600)))
+        result = hint
+    result = int(result)
     _ETA_CACHE[key] = result
     _ETA_CACHE_TS[key] = now
     return result

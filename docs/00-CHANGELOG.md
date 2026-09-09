@@ -4,6 +4,30 @@
 
 ## 2026-09-09 (최신)
 
+### 다중 소스 아키텍처 버그 수정
+- **toki31 수집 속도 회복**: speed_hint 30→5초 (IP 회전으로 30초는 과보수), 루프 사이클 대기 5→1초
+  - ~47초/화 → **~18초/화** (전체 3,240화 ≈ 16시간)
+- **`discover_toki31` 프록시 가드**: DATAIMPULSE/MASKPROXY 자격증명 없으면 조기 반환 (빈 proxy로 Playwright 실패 방지)
+- **`discover_toki31` dry_run 최적화**: 제목만 추출 (전체 에피소드 페이징 제거 → `_extract_title` 빠르게)
+- **ETA 과소평가 수정**: `_estimate_seconds_per_chapter` 캡이 hint×2(10초)로 타이트 → **hint×4(20초)** 로 (실측 ~18초 반영)
+
+### 다중 소스 아키텍처 (소스 레지스트리)
+- **요구사항**: 여러 소스 수용, 도메인 유동(주소 변경), 단일 소스 고정 금지
+- **`sources.json`** (`apps/backend/`): 소스 정의를 코드 수정 없이 관리
+  - `domains`(URL 매칭), `base_url`(크롤링 주소), `collector`(수집기), `discover`(전략), `speed_hint_sec`(ETA)
+  - 북토끼가 `bookto42.com`으로 옮기면 domains/base_url만 수정 — 코드 불변
+- **`lib/sources.py`**: pydantic(BaseModel) 검증 레지스트리
+  - `get_source_from_url()` — URL_PATTERNS 하드코딩 대체
+  - `get_base_url()`, `get_collector()`, `get_discover()`, `get_speed_hint()`
+- **하드코딩 제거**: bookto31.py BASE_URL, toki31_playwright.py 도메인, run_discover URL, URL_PATTERNS → 전부 레지스트리
+- **루프 다중 소스**: `loop --source toki31` 고정 해제 → **모든 소스 처리**
+  - 소스별 페이싱을 run_collect 내부 적응형 딜레이로 (speed_hint 기준: toki31 5~60초, bookto31 300~600초)
+  - systemd `ExecStart=pipeline.py loop` (source 필터 없음), WatchdogSec 600→1800
+- **toki31 전용 discover**: `discover_toki31()` — 에피소드 목록(화수→episode_id) 기반 큐잉
+  - `run_discover`가 `get_discover(source)`로 gnuboard / toki31_episodes 라우팅
+- **`_auto_discover`**: 각 소설의 meta.source에 따라 소스별 discover (현재 gnuboard만, toki31은 follow-up)
+- **웹/Context7 검증**: Factory+Registry 패턴(웹), pydantic-settings(JSON 설정 검증) → pydantic BaseModel 채택
+
 ### Admin ETA 소스 인지 수정 (예상 완료 시간 정확화)
 - **문제**: ETA가 과거 bookto31 수집 속도(collected_at 간격 ~400초) 기준 → toki31 전환 후에도
   "3일/5일"로 표시 (오늘만·화산은 toki31 큐인데 bookto31 속도로 계산)

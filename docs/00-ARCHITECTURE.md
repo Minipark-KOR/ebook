@@ -142,9 +142,11 @@ COLLECTORS = {
 │   │   │   └── metadata_namu.py     # namu.wiki 메타데이터
 │   │   └── lib/                     # 공통 레이어
 │   │       ├── flaresolverr_client.py # FlareSolverr 세션 관리
+│   │       ├── sources.py           # 소스 레지스트리 (sources.json 로드/검증)
 │   │       ├── storage.py           # 챕터 저장/메타 관리
-│   │       ├── rate_limiter.py      # SQLite rate limiter
-│   │       └── toki31_playwright.py # 뉴토끼 Playwright 추출기
+│   │       ├── toki31_playwright.py # 뉴토끼 Playwright 추출기
+│   │       └── rate_limiter.py      # SQLite rate limiter
+│   │   └── sources.json             # 다중 소스 설정 (도메인/base_url/collector/discover)
 │   │
 │   ├── frontend/                    # Next.js 16 + React 19
 │   │   ├── app/

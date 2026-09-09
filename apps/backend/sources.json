@@ -11,6 +11,6 @@
     "base_url": "https://toki31.com",
     "collector": "toki31",
     "discover": "toki31_episodes",
-    "speed_hint_sec": 30
+    "speed_hint_sec": 5
   }
 }

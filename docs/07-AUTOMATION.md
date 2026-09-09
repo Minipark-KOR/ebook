@@ -6,12 +6,12 @@
 
 ```
 devforge-watchdog @ 60초마다     ← SERVICE_TARGETS: ebook-watcher 체크 (프로세스+로그 활동)
-ebook-watcher.service            ← Type=notify, WatchdogSec=600, Restart=on-watchdog
-  └─ pipeline.py loop            ← 상시 실행 (5분 간격) + sd_notify 신호
+ebook-watcher.service            ← Type=notify, WatchdogSec=1800, Restart=on-watchdog
+  └─ pipeline.py loop            ← 상시 실행 (소스별 페이싱) + sd_notify 신호
 ```
 
 **이중 감시 구조**:
-1. **systemd WatchdogSec** (표준): loop이 5분마다 `WATCHDOG=1` → 10분 내 미수신 시 hang 판정 → `on-watchdog` 재시작
+1. **systemd WatchdogSec** (표준): loop이 각 사이클마다 `WATCHDOG=1` → 30분 내 미수신 시 hang 판정 → `on-watchdog` 재시작
 2. **devforge-watchdog** (로컬): `check_ebook_pipeline()`이 프로세스 존재 + 마지막 로그 활동(20분) 확인 → hang/죽음 시 재시작
 
 ## 1. 파이프라인 루프 (pipeline.py loop)
@@ -25,7 +25,7 @@ ebook-watcher.service            ← Type=notify, WatchdogSec=600, Restart=on-wa
 | `bookto31` | 300초 (Cloudflare 보호) | 5~8분 |
 | `toki31` | 5초 (내부 딜레이 스킵) | **15~30초** |
 
-> 2026-09-09부터 대량 수집은 `--source toki31`로 실행 중 (유동 IP 회전 → IP 차단 무력화).
+> **다중 소스**: 루프는 source 무관하게 모든 소스 수집. toki31은 유동 IP 회전으로 고속. 소스 추가/도메인 변경은 sources.json.
 
 ### 실행 흐름
 
@@ -46,7 +46,7 @@ ebook-watcher.service            ← Type=notify, WatchdogSec=600, Restart=on-wa
 systemctl --user start ebook-watcher.service
 
 # CLI 직접 (NOTIFY_SOCKET 없으면 sd_notify 자동 무시)
-python3 scripts/pipeline.py loop --source toki31
+python3 scripts/pipeline.py loop  # 다중 소스 (source 무관)
 ```
 
 ## 2. devforge-watchdog
@@ -111,16 +111,16 @@ Wants=network-online.target
 Type=notify                                                        # sd_notify (READY=1 + WATCHDOG=1)
 EnvironmentFile=/home/opc/.config/devforge/secrets.env
 WorkingDirectory=/opt/workspace/ebooklib
-ExecStart=.../venv/bin/python3 .../scripts/pipeline.py loop --source toki31
-WatchdogSec=600                                                    # 10분 내 신호 없으면 hang
+ExecStart=.../venv/bin/python3 .../scripts/pipeline.py loop  # 다중 소스 (source 무관)
+WatchdogSec=1800                                                    # 30분 내 신호 없으면 hang
 Restart=on-watchdog                                                # hang/실패 시 재시작
 RestartSec=30                                                      # 30초 후 재시도
 StandardOutput=journal
 StandardError=journal
 ```
 
-> **Watchdog 동작**: `pipeline.py loop`이 각 사이클(5분)마다 `_sd_notify()`로
-> `WATCHDOG=1` 신호를 systemd에 보낸다. 10분(WatchdogSec) 내 신호가 없으면
+> **Watchdog 동작**: `pipeline.py loop`이 각 사이클마다 `_sd_notify()`로
+> `WATCHDOG=1` 신호를 systemd에 보낸다. 30분(WatchdogSec) 내 신호가 없으면
 > systemd가 프로세스를 hang으로 판단하고 `on-watchdog`으로 재시작한다.
 > (기존 devforge-watchdog의 로그 기반 감지는 fallback으로 유지)
 
@@ -130,7 +130,7 @@ StandardError=journal
 
 | 장치 | 작동 |
 |---|---|
-| **챕터 간 적응형 지연** | 10×fetch 시간, bookto31 최소 5분 / toki31 5~60초 (loop limit=1 모드에선 외부 사이클 대기로 페이싱) |
+| **챕터 간 적응형 지연** | 10×fetch 시간, bookto31 최소 5분 / toki31 5~60초 (소스별 speed_hint 기반 내부 딜레이로 페이싱) |
 | **재시도 3회** | 같은 URL에 대한 빠른 반복 요청 방지 |
 | **rate_limiter DB** | URL별 마지막 요청 시각 기록, 8분 + ±2분 jitter (bookto31) |
 | **유동 IP 회전 (toki31)** | DataImpulse `__cr.kr` — 매 브라우저 세션 새 IP → IP 차단 무력화 |
@@ -141,7 +141,7 @@ StandardError=journal
 
 | 장치 | 작동 |
 |---|---|
-| **systemd WatchdogSec + on-watchdog** | 10분 내 sd_notify 신호 없으면 hang 판정 후 재시작 |
+| **systemd WatchdogSec + on-watchdog** | 30분 내 sd_notify 신호 없으면 hang 판정 후 재시작 |
 | **devforge-watchdog 60초 체크** | 프로세스 + 로그 활동(20분) 확인, hang/죽음 시 재시작 |
 | **queue 파일 락** | fcntl + atomic write, run_collect 단일 writer 직렬화 (동시 덮어쓰기 방지) |
 | **Backoff schedule (CrashLoopBackOff)** | 반복 실패 시 0→10→20→40→80→120→300초 대기 |
@@ -201,7 +201,7 @@ os.replace(tmp_path, QUEUE_FILE)
 
 | 상황 | 복구 | 시간 |
 |------|------|------|
-| 파이프라인 프로세스 hang (10분 무응답) | systemd WatchdogSec → on-watchdog 재시작 | 10분 |
+| 파이프라인 프로세스 hang (30분 무응답) | systemd WatchdogSec → on-watchdog 재시작 | 30분 |
 | 파이프라인 프로세스 죽음 | systemd on-watchdog / devforge-watchdog 감지 | 30~60초 |
 | 파이프라인 hang (로그 20분 없음) | devforge-watchdog 로그 기반 감지 | 20분 |
 | 3회 실패 챕터 | DLQ(failed.json) 기록, 사후 재시도 가능 | 즉시 |
@@ -252,7 +252,7 @@ python3 scripts/pipeline.py loop "오늘만 사는 기사"
    ├─ URL 자동 분기 (bookto31 / newtoki)
    ├─ 제목 자동 추출 (discover --dry-run)
    └─ discover → 큐 등록
-3. ebook-watcher.service (pipeline.py loop)가 5분 간격으로 수집
+3. ebook-watcher.service (pipeline.py loop)가 소스별 페이싱으로 수집
 4. 챕터 저장 → index → revalidate → (다음 챕터)
 ```
 

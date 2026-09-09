@@ -283,9 +283,9 @@ Wants=network-online.target
 Type=notify                                                        # sd_notify (READY=1 + WATCHDOG=1)
 EnvironmentFile=/home/opc/.config/devforge/secrets.env
 WorkingDirectory=/opt/workspace/ebooklib
-# --source: 현재 toki31 (대량 수집). bookto31 전환 시 변경.
-ExecStart=/opt/workspace/ebooklib/apps/backend/venv/bin/python3 /opt/workspace/ebooklib/scripts/pipeline.py loop --source toki31
-WatchdogSec=600                                                    # 10분 내 신호 없으면 hang
+# 다중 소스: source 필터 없이 모든 소스 수집
+ExecStart=/opt/workspace/ebooklib/apps/backend/venv/bin/python3 /opt/workspace/ebooklib/scripts/pipeline.py loop  # 다중 소스 (source 무관)
+WatchdogSec=1800                                                   # 30분 내 신호 없으면 hang
 Restart=on-watchdog                                                # hang/실패 시 재시작
 RestartSec=30
 StandardOutput=journal

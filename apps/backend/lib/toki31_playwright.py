@@ -14,7 +14,6 @@ toki31의 anti-bot 보호를 우회하기 위해 Playwright 브라우저를 사�
 - Algorithm: AES-128-GCM
 """
 
-import asyncio
 import base64
 import hashlib
 import json
@@ -23,9 +22,9 @@ import os
 import re
 from typing import Optional, Tuple
 
-logger = logging.getLogger(__name__)
-
 from lib.sources import get_base_url
+
+logger = logging.getLogger(__name__)
 
 # .env.local에서 프록시 설정 로드
 ENV_LOCAL = os.path.join(os.path.dirname(__file__), '..', '.env.local')

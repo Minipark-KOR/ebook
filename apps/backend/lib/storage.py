@@ -25,11 +25,20 @@ def get_novel_dir(novel_title: str) -> Path:
 
 
 def _extract_chapter_num(body: str) -> Optional[int]:
-    """본문 첫 줄에서 회차 번호 추출."""
+    """본문 첫 줄에서 회차 번호 추출.
+
+    본문이 '1화\n...' 형태일 때 첫 줄에서 추출.
+    본문이 '「레벨:...' 등으로 시작해 첫 줄이 아닌 위치에 'N화'가 있을 땐
+    첫 번째로 등장하는 'N화/편/장'도 시도한다.
+    """
     if not body:
         return None
     first_line = body.split("\n")[0]
     m = re.match(r"^(\d+)(?:화|편|장)", first_line)
+    if m:
+        return int(m.group(1))
+    # 첫 줄 실패 시 본문에서 'N화/편/장' 형태를 한 번 더 찾아봄
+    m = re.search(r"^(\d+)(?:화|편|장)", body.strip(), re.MULTILINE)
     return int(m.group(1)) if m else None
 
 
@@ -55,7 +64,10 @@ def save_chapter(
     if chapter_num is None:
         chapter_num = _extract_chapter_num(body)
     if chapter_num is None:
-        chapter_num = wr_id
+        # wr_id로 폴백하면 회차 번호가 오염되어 '1화→2화' 탐색이 깨진다.
+        # 정확한 번호를 모르면 chapter를 남기지 않고, 상위 계층(동기화 등)에서
+        # wr_id 기반으로 추정하도록 None을 유지한다.
+        chapter_num = None
 
     novel_id = novel_title.replace(" ", "_").replace("/", "_") if novel_title else f"novel_{wr_id}"
     novel_dir = NOVELS_DIR / novel_id

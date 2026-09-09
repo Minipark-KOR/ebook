@@ -37,6 +37,18 @@ def rebuild_chapters_index(novel_dir: Path) -> list[dict]:
         except (json.JSONDecodeError, KeyError):
             continue
 
+    # chapter 번호 기준 정렬 (없으면 wr_id 폴백) — 화산귀환 등 wr_id 순서가
+    # 뒤섞인 작품 대비, '1화→2화' 탐색이 올바르게 동작하도록.
+    def _key(c):
+        if isinstance(c.get("chapter"), int) and c["chapter"] > 0:
+            return (0, c["chapter"])
+        try:
+            return (1, int(c.get("wr_id") or 0))
+        except (TypeError, ValueError):
+            return (2, 0)
+
+    chapters.sort(key=_key)
+
     # 인덱스 캐시 파일 저장
     index_path = novel_dir / CHAPTERS_INDEX_FILE
     index_data = {
@@ -178,11 +190,29 @@ def get_chapter_detail(wr_id: int) -> Optional[dict]:
                     data = json.load(f)
 
                 # 이전/다음 회차 찾기 (meta.json, 인덱스 제외)
-                chapters = sorted(
-                    [f for f in novel_dir.glob("*.json")
-                     if f.name not in ("meta.json", CHAPTERS_INDEX_FILE)],
-                    key=lambda f: int(f.stem),
-                )
+                # 정렬 기준: chapter 번호 (파일명 wr_id가 아니라 회차 번호)
+                # 화산귀환처럼 wr_id 정렬이 뒤섞이는 작품 대비.
+                chapter_files = [
+                    f for f in novel_dir.glob("*.json")
+                    if f.name not in ("meta.json", CHAPTERS_INDEX_FILE)
+                ]
+
+                def _chapter_key(f) -> int:
+                    try:
+                        with open(f, "r", encoding="utf-8") as fh:
+                            d = json.load(fh)
+                        ch = d.get("chapter")
+                        if isinstance(ch, int) and ch > 0:
+                            return ch
+                    except Exception:
+                        pass
+                    # chapter 없으면 wr_id로 폴백
+                    try:
+                        return int(f.stem)
+                    except ValueError:
+                        return 0
+
+                chapters = sorted(chapter_files, key=_chapter_key)
                 current_idx = None
                 for idx, ch in enumerate(chapters):
                     if ch.stem == str(wr_id):

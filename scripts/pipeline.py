@@ -37,7 +37,40 @@ WATCHER_DIR.mkdir(parents=True, exist_ok=True)
 QUEUE_FILE = WATCHER_DIR / 'queue.json'
 STATUS_FILE = WATCHER_DIR / 'status.json'
 PID_FILE = WATCHER_DIR / 'pipeline.pid'
+DLQ_FILE = WATCHER_DIR / 'failed.json'
 CHAPTER_DELAY_SEC = 300
+
+
+_SD_NOTIFY_READY = False
+
+
+def _sd_notify(state: str = "") -> None:
+    """systemd watchdog 신호 전송 (Type=notify + WatchdogSec 대응).
+
+    loop이 5분 간격으로 사이클을 돌 때 WATCHDOG=1 신호를 보내,
+    systemd가 프로세스 hang 여부를 감지한다.
+    첫 호출 시 READY=1을 함께 보내 서비스 시작을 알린다.
+    CLI 실행(NOTIFY_SOCKET 없음)은 무시.
+    """
+    global _SD_NOTIFY_READY
+    try:
+        sock_path = os.environ.get("NOTIFY_SOCKET")
+        if not sock_path:
+            return
+        import socket
+        msg = ""
+        if not _SD_NOTIFY_READY:
+            msg += "READY=1\n"
+            _SD_NOTIFY_READY = True
+        msg += "WATCHDOG=1\n"
+        if state:
+            msg += f"STATUS={state}\n"
+        sock = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)
+        sock.connect(sock_path)
+        sock.send(msg.encode())
+        sock.close()
+    except Exception:
+        pass  # watchdog 신호 실패는 치명적이지 않음
 
 
 def _write_status(data: dict) -> None:
@@ -48,6 +81,40 @@ def _write_status(data: dict) -> None:
         STATUS_FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2))
     except Exception as e:
         log.warning(f"status.json 기록 실패: {e}")
+
+
+def _add_to_dlq(item: dict, error: str) -> None:
+    """실패한 항목을 DLQ(failed.json)에 기록 — 데이터 손실 방지.
+
+    3회 시도 후 실패한 항목은 queue에서 제거되지만, 재시도/분석을 위해
+    failed.json에 보존한다.
+    """
+    try:
+        records = []
+        if DLQ_FILE.exists():
+            try:
+                with open(DLQ_FILE, encoding='utf-8') as f:
+                    records = json.load(f)
+                if not isinstance(records, list):
+                    records = []
+            except (json.JSONDecodeError, OSError):
+                records = []
+        records.append({
+            "wr_id": item.get('wr_id'),
+            "novel_title": item.get('novel_title'),
+            "source": item.get('source', 'bookto31'),
+            "chapter": item.get('chapter'),
+            "error": error,
+            "attempts": item.get('attempts'),
+            "failed_at": datetime.now(timezone.utc).isoformat(),
+        })
+        # 최대 5000개 유지 (무한 증가 방지)
+        if len(records) > 5000:
+            records = records[-5000:]
+        with open(DLQ_FILE, 'w', encoding='utf-8') as f:
+            json.dump(records, f, ensure_ascii=False, indent=2)
+    except Exception as e:
+        log.warning(f"DLQ 기록 실패: {e}")
 
 # ============================================================
 # 수집기 레지스트리 — source별 collector 분기
@@ -297,8 +364,10 @@ def run_collect(limit: int = 0, source_filter: str = "") -> dict:
             removed_ids.add(wr_id)
             continue
 
-        # 3회 재시도
+        # 3회 재시도 (fetch 시간 측정 → 적응형 딜레이)
         success, body, error_msg, chapter_num = False, "", "", None
+        fetch_elapsed = 0.0
+        _t0 = time.monotonic()
         for attempt in range(3):
             try:
                 success, body, error_msg, chapter_num = collector(wr_id, item)
@@ -308,11 +377,14 @@ def run_collect(limit: int = 0, source_filter: str = "") -> dict:
                 error_msg = f"{type(e).__name__}: {e}"
                 log.warning(f"  fetch 실패 ({attempt+1}/3): {error_msg}")
                 time.sleep(2)
+        fetch_elapsed = time.monotonic() - _t0
 
         if not success:
             item['last_error'] = f"3회 시도 후 실패 (body={len(body) if body else 0})"
             log.warning(f"  ✗ {item['last_error']}")
             if item['attempts'] >= 3:
+                # 3회 실패 → DLQ 기록 후 queue에서 제거 (데이터 보존)
+                _add_to_dlq(item, item['last_error'])
                 removed_ids.add(wr_id)
             errors.append({"wr_id": wr_id, "error": item['last_error']})
             continue
@@ -327,10 +399,16 @@ def run_collect(limit: int = 0, source_filter: str = "") -> dict:
         removed_ids.add(wr_id)
         processed += 1
 
-        # 다음 챕터 전 대기
+        # 다음 챕터 전 대기 — 적응형 딜레이 (업계 표준: 10 × fetch 시간)
+        # bookto31: Cloudflare 차단 방지 위해 최소 5분 / 최대 10분
+        # toki31: 한번에 다 받는 형식이라 짧게 (5~60초)
         if len(queue) > 0 and limit != 1:
-            log.info(f"  {CHAPTER_DELAY_SEC}초 대기...")
-            time.sleep(CHAPTER_DELAY_SEC)
+            if source == "toki31":
+                delay = max(5.0, min(60.0, fetch_elapsed * 10))
+            else:
+                delay = max(300.0, min(600.0, fetch_elapsed * 10))
+            log.info(f"  {delay:.0f}초 대기 (fetch {fetch_elapsed:.1f}s × 10)...")
+            time.sleep(delay)
 
     # 전체 queue에서 처리/실패 제거된 항목만 제거하고 저장
     remaining_queue = [q for q in full_queue if q['wr_id'] not in removed_ids]
@@ -456,18 +534,42 @@ def run_revalidate(novel_id: Optional[str] = None) -> dict:
 # === 유틸 ===
 
 def _load_queue() -> list:
+    """큐 읽기 — fcntl 공유 잠금으로 동시 읽기 안전."""
     if not QUEUE_FILE.exists():
         return []
     try:
-        with open(QUEUE_FILE) as f:
-            return json.load(f)
-    except (json.JSONDecodeError, OSError):
-        return []
+        import fcntl
+        with open(QUEUE_FILE, 'r') as f:
+            fcntl.flock(f, fcntl.LOCK_SH)
+            try:
+                return json.load(f)
+            finally:
+                fcntl.flock(f, fcntl.LOCK_UN)
+    except (json.JSONDecodeError, OSError, ImportError):
+        try:
+            with open(QUEUE_FILE) as f:
+                return json.load(f)
+        except (json.JSONDecodeError, OSError):
+            return []
 
 
 def _save_queue(queue: list) -> None:
-    with open(QUEUE_FILE, 'w') as f:
-        json.dump(queue, f, ensure_ascii=False, indent=2)
+    """큐 저장 — 배타적 잠금 + atomic write (tmp → rename).
+
+    동시 쓰기 시 read-modify-write race를 방지한다.
+    (toki31/bookto31 루프가 서로의 항목을 덮어쓰던 버그 해결)
+    """
+    import fcntl
+    tmp_path = QUEUE_FILE.with_suffix('.json.tmp')
+    with open(tmp_path, 'w') as f:
+        fcntl.flock(f, fcntl.LOCK_EX)
+        try:
+            json.dump(queue, f, ensure_ascii=False, indent=2)
+            f.flush()
+            os.fsync(f.fileno())
+        finally:
+            fcntl.flock(f, fcntl.LOCK_UN)
+    os.replace(tmp_path, QUEUE_FILE)  # atomic rename
 
 
 def _save_chapter_only(novel_title: str, wr_id: int, body: str, chapter_num: Optional[int] = None, source: str = "bookto31") -> bool:
@@ -666,6 +768,8 @@ def main():
                 cycle += 1
                 log.info(f"\n--- Cycle {cycle} ---")
                 _write_status({"phase": "loop", "cycle": cycle, "source": source})
+                # systemd watchdog 신호 (WatchdogSec 대응)
+                _sd_notify(f"cycle {cycle}")
 
                 # bookto31: 매월 1일 1회 연재작 새 회차 감지 (discover)
                 today = datetime.now().strftime("%Y-%m")

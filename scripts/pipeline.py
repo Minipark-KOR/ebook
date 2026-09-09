@@ -310,7 +310,19 @@ def run_collect(limit: int = 0, source_filter: str = "") -> dict:
     """큐에서 wr_id를 하나씩 꺼내 source별 collector로 fetch → JSON 저장.
     limit: 최대 처리할 챕터 수 (0=무제한)
     source_filter: 특정 source만 처리 (빈 문자열=전체)
+
+    단일 writer 락: 두 프로세스(예: bookto31 loop + toki31 collect)가 동시에
+    queue를 처리하지 못하도록 전체 트랜잭션을 직렬화한다.
     """
+    _acquire_collect_lock()
+    try:
+        return _run_collect_locked(limit, source_filter)
+    finally:
+        _release_collect_lock()
+
+
+def _run_collect_locked(limit: int = 0, source_filter: str = "") -> dict:
+    """run_collect 본체 (락 보유 상태에서 실행)."""
     full_queue = _load_queue()
     if not full_queue:
         return {"processed": 0, "errors": [], "remaining": 0}
@@ -534,17 +546,18 @@ def run_revalidate(novel_id: Optional[str] = None) -> dict:
 # === 유틸 ===
 
 def _load_queue() -> list:
-    """큐 읽기 — fcntl 공유 잠금으로 동시 읽기 안전."""
+    """큐 읽기 — 락 파일 공유 잠금으로 동시 읽기 안전."""
     if not QUEUE_FILE.exists():
         return []
     try:
         import fcntl
-        with open(QUEUE_FILE, 'r') as f:
-            fcntl.flock(f, fcntl.LOCK_SH)
-            try:
+        lockf = _queue_lock()
+        fcntl.flock(lockf, fcntl.LOCK_SH)
+        try:
+            with open(QUEUE_FILE) as f:
                 return json.load(f)
-            finally:
-                fcntl.flock(f, fcntl.LOCK_UN)
+        finally:
+            fcntl.flock(lockf, fcntl.LOCK_UN)
     except (json.JSONDecodeError, OSError, ImportError):
         try:
             with open(QUEUE_FILE) as f:
@@ -553,23 +566,55 @@ def _load_queue() -> list:
             return []
 
 
+_QUEUE_LOCK_FILE = None
+
+
+def _queue_lock():
+    """queue.json 전용 락 파일 (fcntl 배타 잠금). 크로스 프로세스 직렬화."""
+    global _QUEUE_LOCK_FILE
+    if _QUEUE_LOCK_FILE is None:
+        _QUEUE_LOCK_FILE = open(QUEUE_FILE.with_suffix('.lock'), 'w')
+    return _QUEUE_LOCK_FILE
+
+
+def _acquire_collect_lock():
+    """run_collect 전체 트랜잭션 락 — 두 프로세스가 동시에 queue를 처리하지 못하게."""
+    import fcntl
+    fcntl.flock(_queue_lock(), fcntl.LOCK_EX)
+    return True
+
+
+def _release_collect_lock():
+    """run_collect 트랜잭션 락 해제."""
+    import fcntl
+    try:
+        fcntl.flock(_queue_lock(), fcntl.LOCK_UN)
+    except Exception:
+        pass
+
+
 def _save_queue(queue: list) -> None:
-    """큐 저장 — 배타적 잠금 + atomic write (tmp → rename).
+    """큐 저장 — 크로스 프로세스 배타 잠금 + atomic write (tmp → rename).
 
     동시 쓰기 시 read-modify-write race를 방지한다.
     (toki31/bookto31 루프가 서로의 항목을 덮어쓰던 버그 해결)
+    각 프로세스는 전용 락 파일(queue.json.lock)을 사용해 직렬화하고,
+    임시 파일도 프로세스/스레드별 고유 이름으로 생성해 충돌을 피한다.
     """
     import fcntl
-    tmp_path = QUEUE_FILE.with_suffix('.json.tmp')
-    with open(tmp_path, 'w') as f:
-        fcntl.flock(f, fcntl.LOCK_EX)
-        try:
+    import threading as _threading
+    lockf = _queue_lock()
+    fcntl.flock(lockf, fcntl.LOCK_EX)
+    try:
+        # PID + 스레드 ID 조합으로 고유 tmp 파일 생성 (동시 쓰기 충돌 방지)
+        tmp_path = QUEUE_FILE.with_suffix(f'.tmp.{os.getpid()}.{_threading.get_ident()}')
+        with open(tmp_path, 'w') as f:
             json.dump(queue, f, ensure_ascii=False, indent=2)
             f.flush()
             os.fsync(f.fileno())
-        finally:
-            fcntl.flock(f, fcntl.LOCK_UN)
-    os.replace(tmp_path, QUEUE_FILE)  # atomic rename
+        os.replace(tmp_path, QUEUE_FILE)  # atomic rename
+    finally:
+        fcntl.flock(lockf, fcntl.LOCK_UN)
 
 
 def _save_chapter_only(novel_title: str, wr_id: int, body: str, chapter_num: Optional[int] = None, source: str = "bookto31") -> bool:

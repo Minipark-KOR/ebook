@@ -10,6 +10,7 @@
   python3 scripts/pipeline.py enrich [novel_id]
   python3 scripts/pipeline.py index [novel_id]
   python3 scripts/pipeline.py revalidate [novel_id]
+  python3 scripts/pipeline.py epub [novel_id ...]    # EPUB 캐시 제작/재제작 (인자 없으면 전체)
   python3 scripts/pipeline.py all <wr_id> [novel_title] [--source bookto31|newtoki]
   python3 scripts/pipeline.py loop <novel_title> [--source bookto31|newtoki]  # 자동 루프
 """
@@ -342,6 +343,8 @@ def _run_collect_locked(limit: int = 0, source_filter: str = "") -> dict:
     total = len(queue)
     # 처리/제거된 wr_id 추적 (전체 queue에서 제거)
     removed_ids = set()
+    # 수집이 끝난 소설 감지용 (novel_id → 제목)
+    touched_novels: dict[str, str] = {}
 
     for i in range(min(max_run, len(queue))):
         item = queue[i]
@@ -410,6 +413,8 @@ def _run_collect_locked(limit: int = 0, source_filter: str = "") -> dict:
         # 큐에서 제거 (전체 queue 기준)
         removed_ids.add(wr_id)
         processed += 1
+        if novel_title:
+            touched_novels[novel_title.replace(' ', '_').replace('/', '_')] = novel_title
 
         # 다음 챕터 전 대기 — 적응형 딜레이 (업계 표준: 10 × fetch 시간)
         # bookto31: Cloudflare 차단 방지 위해 최소 5분 / 최대 10분
@@ -426,6 +431,10 @@ def _run_collect_locked(limit: int = 0, source_filter: str = "") -> dict:
     remaining_queue = [q for q in full_queue if q['wr_id'] not in removed_ids]
     _save_queue(remaining_queue)
     log.info(f"collect 완료: {processed}개 처리, {len(remaining_queue)}개 남음")
+
+    # EPUB 제작/재제작 — 이번에 queue가 비워진(전체 회차 수집 완료) 소설만
+    _build_epub_for_drained_novels(remaining_queue, touched_novels)
+
     _write_status({
         "phase": "collect",
         "current": None,
@@ -664,6 +673,33 @@ def _extract_chapter_from_html(html: str) -> Optional[int]:
     return None
 
 
+def _build_epub_for_drained_novels(remaining_queue: list, touched_novels: dict) -> None:
+    """queue가 비워진(전체 회차 수집 완료) 소설의 EPUB을 제작/재제작.
+
+    fingerprint 기반이라 새 회차가 없으면 no-op. 실패해도 파이프라인은 계속 진행.
+    """
+    if not touched_novels:
+        return
+    from services.epub import maybe_build_epub
+
+    remaining_novel_ids = {
+        q.get('novel_title', '').replace(' ', '_').replace('/', '_')
+        for q in remaining_queue if q.get('novel_title')
+    }
+    for novel_id, title in touched_novels.items():
+        if novel_id in remaining_novel_ids:
+            # 아직 이 소설의 다른 회차가 queue에 남아 있음 → 아직 수집 중
+            continue
+        try:
+            path = maybe_build_epub(novel_id)
+            if path:
+                log.info(f"  ✓ EPUB 제작/재제작 완료: {title} -> {path.name}")
+            else:
+                log.info(f"  - EPUB 빌드 스킵/실패: {title} (챕터 부족 또는 제작 실패)")
+        except Exception as e:
+            log.warning(f"  ⚠ EPUB 빌드 오류 ({title}): {type(e).__name__}: {e}")
+
+
 # === 메인 ===
 
 def run_all(novel_main_wr_id: int, novel_title: str, source: str = "bookto31") -> dict:
@@ -797,6 +833,30 @@ def main():
     elif cmd == "revalidate":
         novel_id = sys.argv[2] if len(sys.argv) > 2 else None
         run_revalidate(novel_id)
+
+    elif cmd == "epub":
+        """EPUB 캐시 제작/재제작 (수동).
+        사용법: pipeline.py epub [novel_id ...]   (인자 없으면 전체 소설)
+        fingerprint 기반이라 변경 없으면 no-op.
+        """
+        from services.data import DATA_DIR
+        from services.epub import maybe_build_epub
+        targets = sys.argv[2:]
+        built = 0
+        for novel_dir in sorted(DATA_DIR.iterdir()):
+            nid = novel_dir.name
+            if not novel_dir.is_dir() or nid.startswith("."):
+                continue
+            if targets and nid not in targets:
+                continue
+            try:
+                path = maybe_build_epub(nid, force=True)
+                log.info(f"  {nid}: {'✓ 제작' if path else '- 스킵/실패'}")
+                if path:
+                    built += 1
+            except Exception as e:
+                log.warning(f"  {nid}: 오류 {type(e).__name__}: {e}")
+        log.info(f"EPUB 캐시 제작 완료: {built}개")
 
     elif cmd == "all":
         if len(sys.argv) < 4:

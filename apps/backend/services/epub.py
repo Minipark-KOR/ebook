@@ -15,6 +15,7 @@ DB에 저장된 챕터 JSON 파일들을 모아서 EPUB 파일을 생성한다.
 
 import io
 import json
+import os
 import re
 from pathlib import Path
 from typing import Optional, Dict
@@ -32,6 +33,7 @@ from ebooklib.epub import (
 DATA_DIR = Path("/opt/ai_data/flaresolverr/novels")
 FONTS_DIR = Path("/opt/workspace/ebooklib/scripts/fonts")
 COVERS_DIR = Path("/opt/ai_data/flaresolverr/covers")
+EPUB_DIR = Path("/opt/ai_data/flaresolverr/epub")
 
 # 4개 폰트 정의 (filename, font-family name, MIME type)
 FONTS = [
@@ -201,8 +203,34 @@ def _get_cover_path(novel_id: str) -> Optional[Path]:
     return None
 
 
-def _build_cover_html(title: str, cover_href: str) -> bytes:
-    """EPUB 표지 페이지 HTML."""
+def _get_cover_jpeg(novel_id: str) -> Optional[Path]:
+    """표지를 JPEG로 변환/캐시해 반환.
+
+    EPUB 리더의 webp 지원이 불안정하므로 JPEG로 통일한다.
+    변환 실패 시 원본이 이미 jpg/jpeg면 그대로, 아니면 None.
+    """
+    src = _get_cover_path(novel_id)
+    if not src:
+        return None
+    # 이미 jpg/jpeg면 그대로 사용
+    if src.suffix.lower() in (".jpg", ".jpeg"):
+        return src
+    # webp/png → jpeg 변환 (EPUB_DIR에 캐시)
+    try:
+        jpeg_path = EPUB_DIR / f"cover_{novel_id}.jpg"
+        if jpeg_path.exists():
+            return jpeg_path
+        from PIL import Image
+        img = Image.open(src)
+        img = img.convert("RGB")
+        img.save(jpeg_path, "JPEG", quality=90)
+        return jpeg_path
+    except Exception:
+        return None
+
+
+def _build_cover_html(title: str, author: str, cover_href: str) -> bytes:
+    """EPUB 표지 페이지 HTML (이미지 포함)."""
     body = (
         '<?xml version="1.0" encoding="utf-8"?>'
         '<!DOCTYPE html>'
@@ -214,9 +242,32 @@ def _build_cover_html(title: str, cover_href: str) -> bytes:
         '<div style="text-align:center; margin:0 auto; padding:2em 0;">'
         f'<img src="{cover_href}" alt="{title}" style="max-width:100%; height:auto; box-shadow:0 2px 8px rgba(0,0,0,.3);" />'
         f"<h2 style=\"font-size:1.4em; margin-top:1em;\">{title}</h2>"
+        f"<p style=\"color:#666; margin-top:.2em;\">{author}</p>"
         "</div>"
         "</body></html>"
     )
+    return body.encode("utf-8")
+
+
+def _build_title_page_html(title: str, author: str, publisher: str, description: str) -> bytes:
+    """표지 이미지가 없을 때 사용하는 텍스트 타이틀 페이지 HTML."""
+    body = (
+        '<?xml version="1.0" encoding="utf-8"?>'
+        '<!DOCTYPE html>'
+        '<html xmlns="http://www.w3.org/1999/xhtml">'
+        "<head>"
+        f"<title>{title}</title>"
+        "</head>"
+        "<body>"
+        '<div style="text-align:center; margin:0 auto; padding:3em 1em;">'
+        f'<h1 style="font-size:1.8em; margin-bottom:.5em;">{title}</h1>'
+        f"<p style=\"font-size:1.2em; color:#333; margin-top:.5em;\">{author}</p>"
+    )
+    if publisher:
+        body += f"<p style=\"color:#666; margin-top:.3em;\">{publisher}</p>"
+    if description:
+        body += f'<p style="margin-top:2em; color:#555; line-height:1.8;">{description}</p>'
+    body += "</div></body></html>"
     return body.encode("utf-8")
 
 
@@ -267,30 +318,30 @@ def build_epub(novel_id: str) -> Optional[bytes]:
     # 4개 폰트 + CSS 임베드
     _add_fonts_and_css(book)
 
-    # 표지 이미지 임베드
+    # 표지 (JPEG로 통일) + 타이틀/표지 페이지 (이미지 없어도 항상 생성)
+    cover_jpeg = _get_cover_jpeg(novel_id)
     cover_page = None
-    cover_path = _get_cover_path(novel_id)
-    if cover_path:
-        ext = cover_path.suffix.lower()
-        mime = {
-            ".webp": "image/webp",
-            ".jpg": "image/jpeg",
-            ".jpeg": "image/jpeg",
-            ".png": "image/png",
-        }.get(ext, "image/webp")
-        with open(cover_path, "rb") as f:
-            cover_bytes = f.read()
-        
-        # set_cover로 이미지 임베드 (create_page=True로 표지 페이지 자동 생성)
-        book.set_cover(f"cover{ext}", cover_bytes, create_page=True)
-        
-        # 수동으로 커스텀 표지 페이지 생성 (set_cover가 생성한 기본 페이지 대체)
+    if cover_jpeg:
+        cover_bytes = cover_jpeg.read_bytes()
+        # set_cover: 이미지 아이템 + 메타데이터 cover 참조 (썸네일용).
+        # create_page=False → 기본 페이지 생성 안 함, 커스텀 표지 페이지만 spine에 포함
+        book.set_cover("cover.jpg", cover_bytes, create_page=False)
         cover_page = EpubHtml(
             uid="cover_page",
             title="표지",
             file_name="cover.xhtml",
             lang=language,
-            content=_build_cover_html(title, f"cover{ext}"),
+            content=_build_cover_html(title, author, "cover.jpg"),
+        )
+        book.add_item(cover_page)
+    else:
+        # 표지 이미지가 없어도 타이틀 페이지는 항상 생성
+        cover_page = EpubHtml(
+            uid="cover_page",
+            title="표지",
+            file_name="cover.xhtml",
+            lang=language,
+            content=_build_title_page_html(title, author, publisher, description),
         )
         book.add_item(cover_page)
 
@@ -321,9 +372,10 @@ def build_epub(novel_id: str) -> Optional[bytes]:
     book.add_item(EpubNcx())
     book.add_item(EpubNav())
     
-    # spine: cover(이미지) -> cover_page(커스텀 HTML) -> nav -> 챕터
+    # spine: cover_page(표지/타이틀) -> nav -> 챕터
+    # (cover 이미지는 set_cover 메타데이터로만 참조, spine 별도 항목 아님)
     if cover_page:
-        book.spine = ["cover", "cover_page", "nav", *chapter_items]
+        book.spine = ["cover_page", "nav", *chapter_items]
     else:
         book.spine = ["nav", *chapter_items]
 
@@ -340,3 +392,73 @@ def get_novel_title(novel_id: str) -> str:
         with open(meta_file, "r", encoding="utf-8") as f:
             return json.load(f).get("title", novel_id)
     return novel_id
+
+
+def get_epub_cache_path(novel_id: str) -> Path:
+    """캐시된 EPUB 파일 경로 (존재 여부와 무관)."""
+    return EPUB_DIR / f"{novel_id}.epub"
+
+
+def get_novel_fingerprint(novel_id: str) -> Optional[dict]:
+    """소설 데이터의 현재 상태 지문.
+
+    (챕터 수, 최고 chapter 번호, 가장 최근 collected_at)으로 구성.
+    이 값이 바뀌면 EPUB 재제작이 필요함을 의미한다.
+    """
+    novel_dir = DATA_DIR / novel_id
+    if not novel_dir.is_dir():
+        return None
+    chapter_files = [
+        f for f in novel_dir.iterdir()
+        if f.suffix == ".json" and f.stem.isdigit()
+    ]
+    if not chapter_files:
+        return None
+    max_chapter = 0
+    latest_ts = ""
+    for f in chapter_files:
+        ch = _read_chapter(f)
+        if not ch:
+            continue
+        c = ch.get("chapter")
+        if isinstance(c, int) and c > max_chapter:
+            max_chapter = c
+        ts = ch.get("collected_at", "")
+        if ts and ts > latest_ts:
+            latest_ts = ts
+    return {
+        "novel_id": novel_id,
+        "count": len(chapter_files),
+        "max_chapter": max_chapter,
+        "latest_collected_at": latest_ts,
+    }
+
+
+def maybe_build_epub(novel_id: str, force: bool = False) -> Optional[Path]:
+    """fingerprint가 바뀐 경우에만 EPUB 재제작. 캐시 경로 반환.
+
+    - 전체 회차 수집이 끝난 시점(queue 비움)에 호출된다.
+    - fingerprint가 캐시와 같으면(변경 없음) 재빌드 없이 기존 캐시 반환.
+    - 제작 실패(챕터 부족 등) 시 None.
+    """
+    EPUB_DIR.mkdir(parents=True, exist_ok=True)
+    fp = get_novel_fingerprint(novel_id)
+    if not fp:
+        return None
+    epub_path = get_epub_cache_path(novel_id)
+    fp_file = EPUB_DIR / f"{novel_id}.fingerprint.json"
+    if not force and epub_path.exists() and fp_file.exists():
+        try:
+            old = json.loads(fp_file.read_text(encoding="utf-8"))
+            if old == fp:
+                return epub_path
+        except Exception:
+            pass
+    data = build_epub(novel_id)
+    if not data:
+        return None
+    tmp = epub_path.with_suffix(".epub.tmp")
+    tmp.write_bytes(data)
+    os.replace(tmp, epub_path)
+    fp_file.write_text(json.dumps(fp, ensure_ascii=False, indent=1), encoding="utf-8")
+    return epub_path

@@ -3,14 +3,11 @@
 # Path: none — 초기 구현
 """소설 관련 API 라우터"""
 
-from urllib.parse import quote
-
 import requests
 from fastapi import APIRouter, HTTPException, Query
-from fastapi.responses import Response, StreamingResponse
+from fastapi.responses import Response
 
 from services.data import get_novel_list, get_novel_detail
-from services.epub import build_epub, get_novel_title
 
 router = APIRouter()
 
@@ -94,8 +91,8 @@ async def get_novel(novel_id: str):
 async def download_epub(novel_id: str):
     """EPUB 다운로드.
 
-    DB의 모든 챕터를 모아서 EPUB 파일을 생성하고 다운로드.
-    한글 깨짐 방지용 GoNoto 폰트가 임베드됨.
+    파이프라인이 전체 회차 수집 완료 시 생성한 캐시 파일을 서빙한다.
+    아직 제작 전이면 409 (완결/전체 수집 후 생성).
     """
     # URL의 한글 novel_id는 공백으로 들어옴 - DB는 언더스코 버전 사용
     # novel_id 예: "하남자의 탑 공략법" (URL) → "하남자의_탑_공략법" (DB)
@@ -105,23 +102,21 @@ async def download_epub(novel_id: str):
     if not novel:
         raise HTTPException(status_code=404, detail="Novel not found")
 
-    epub_bytes = build_epub(novel_id_db)
-    if not epub_bytes:
+    from fastapi.responses import FileResponse
+
+    from services.epub import get_epub_cache_path, get_novel_title
+
+    epub_path = get_epub_cache_path(novel_id_db)
+    if not epub_path.exists():
         raise HTTPException(
-            status_code=500,
-            detail="EPUB 생성 실패 (챕터 데이터 없음)",
+            status_code=409,
+            detail="EPUB이 아직 제작되지 않았습니다. 전체 회차 수집이 완료된 후 생성됩니다.",
         )
 
     title = get_novel_title(novel_id_db)
     filename = f"{title}.epub"
-
-    return Response(
-        content=epub_bytes,
+    return FileResponse(
+        epub_path,
         media_type="application/epub+zip",
-        headers={
-            "Content-Disposition": (
-                f"attachment; filename*=UTF-8''{quote(filename)}"
-            ),
-            "Content-Length": str(len(epub_bytes)),
-        },
+        filename=filename,
     )

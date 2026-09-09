@@ -296,3 +296,5 @@ ebook-watcher.service            ← Type=notify, WatchdogSec=600, Restart=on-wa
 - [05-DEPLOYMENT.md](05-DEPLOYMENT.md) - 배포
 - [06-MAINTENANCE.md](06-MAINTENANCE.md) - 유지보수
 - [07-AUTOMATION.md](07-AUTOMATION.md) - 자동화 시스템
+- **DevForge 전체 구조**: `/opt/projects/server/docs/system-architecture.md` — ebook 파이프라인 + watchdog + 데이터 흐름 통합 문서
+- [07-AUTOMATION.md](07-AUTOMATION.md) - 자동화 시스템

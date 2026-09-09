@@ -21,6 +21,7 @@ import os
 import re
 import subprocess
 import threading
+import time
 from pathlib import Path
 from typing import Optional, Tuple
 
@@ -187,13 +188,22 @@ def get_queue_stats() -> dict:
 
 NOVELS_DIR = Path("/opt/ai_data/flaresolverr/novels")
 
+# ETA 추정 TTL 캐시 (novel_dir.name → (result, ts))
+_ETA_CACHE: dict = {}
+_ETA_CACHE_TS: dict = {}
+
 
 def _estimate_seconds_per_chapter(novel_dir: Path, fallback: int = 300) -> int:
     """최근 수집 간격으로 '챕터당 소요시간(초)' 추정.
 
     최근 5개 챕터의 collected_at 간격 평균. 데이터 없으면 fallback.
     bookto31은 적응형 딜레이(300~600초), toki31은 5~60초.
+
+    TTL 캐시(60초): /pipeline/status가 3초마다 폴링하므로 파일 전체 읽기를 줄인다.
     """
+    now = time.time()
+    if now - _ETA_CACHE_TS.get(novel_dir.name, 0) < 60:
+        return _ETA_CACHE.get(novel_dir.name, fallback)
     stamps = []
     for f in novel_dir.glob("*.json"):
         if f.name in ("meta.json", "_chapters_index.json") or not f.stem.isdigit():
@@ -208,23 +218,24 @@ def _estimate_seconds_per_chapter(novel_dir: Path, fallback: int = 300) -> int:
                 stamps.append(t)
         except Exception:
             continue
-    if len(stamps) < 2:
-        return fallback
-    stamps.sort()
-    from datetime import datetime
-    try:
-        times = [datetime.fromisoformat(t) for t in stamps[-6:]]
-        gaps = [
-            (times[i + 1] - times[i]).total_seconds()
-            for i in range(len(times) - 1)
-        ]
-        gaps = [g for g in gaps if g > 0]
-        if not gaps:
-            return fallback
-        avg = sum(gaps) / len(gaps)
-        return int(max(10, min(avg, 3600)))
-    except Exception:
-        return fallback
+    result = fallback
+    if len(stamps) >= 2:
+        stamps.sort()
+        from datetime import datetime
+        try:
+            times = [datetime.fromisoformat(t) for t in stamps[-6:]]
+            gaps = [
+                (times[i + 1] - times[i]).total_seconds()
+                for i in range(len(times) - 1)
+            ]
+            gaps = [g for g in gaps if g > 0]
+            if gaps:
+                result = int(max(10, min(sum(gaps) / len(gaps), 3600)))
+        except Exception:
+            pass
+    _ETA_CACHE[novel_dir.name] = result
+    _ETA_CACHE_TS[novel_dir.name] = now
+    return result
 
 
 def get_novel_status() -> list[dict]:

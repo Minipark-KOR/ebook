@@ -21,6 +21,7 @@ import sys
 import time
 import logging
 import asyncio
+import threading
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional, Callable
@@ -472,6 +473,21 @@ def _run_collect_locked(limit: int = 0, source_filter: str = "") -> dict:
 
 # === 3단계: ENRICH — namu.wiki 메타데이터 보강 ===
 
+# namu.wiki는 30분 rate limit이 있어 호출 시 최대 30분 대기할 수 있다.
+# 수집 루프를 블록하지 않도록 백그라운드 실행 + 직렬화(동시 namu 호출 방지).
+_ENRICH_LOCK = threading.Lock()
+
+
+def run_enrich_background(novel_id: str) -> None:
+    """메타데이터 갱신을 백그라운드 스레드로 실행 (수집 루프 비블록)."""
+    def _job():
+        try:
+            with _ENRICH_LOCK:
+                run_enrich(novel_id, force=True)
+        except Exception as e:
+            log.warning(f"  백그라운드 메타 갱신 실패 ({novel_id}): {type(e).__name__}: {e}")
+    threading.Thread(target=_job, daemon=True).start()
+
 def run_enrich(novel_id: Optional[str] = None, force: bool = False) -> dict:
     """meta.json에 namu.wiki 메타데이터 보강.
 
@@ -752,21 +768,22 @@ def run_all(novel_main_wr_id: int, novel_title: str, source: str = "bookto31") -
     first = run_collect(limit=1, source_filter=source)
     results['collect_first'] = first
 
-    # 3. enrich — URL 수신 시이므로 항상 갱신 (force)
     novel_id = novel_title.replace(' ', '_').replace('/', '_')
-    log.info("\n[3/5] ENRICH — 메타데이터 보강")
-    enriched = run_enrich(novel_id, force=True)
-    results['enrich'] = enriched
 
-    # 4. index
-    log.info("\n[4/5] INDEX — 인덱스 캐시 재구축")
+    # 3. index
+    log.info("\n[3/5] INDEX — 인덱스 캐시 재구축")
     indexed = run_index(novel_id)
     results['index'] = indexed
 
-    # 5. 나머지 collect
-    log.info("\n[5/5] COLLECT — 나머지 수집")
+    # 4. 나머지 collect — 수집을 먼저 끝낸다 (namu 30분 대기로 수집이 늦어지지 않게)
+    log.info("\n[4/5] COLLECT — 나머지 수집")
     rest = run_collect(limit=0, source_filter=source)
     results['collect_rest'] = rest
+
+    # 5. enrich — URL 수신 시이므로 항상 갱신 (force). namu rate limit(최대 30분)으로
+    #    수집을 블록하지 않도록 백그라운드로 실행.
+    log.info("\n[5/5] ENRICH — 메타데이터 보강 (백그라운드)")
+    run_enrich_background(novel_id)
 
     # revalidate (마지막)
     log.info("\n[5/5] REVALIDATE — 캐시 갱신")
@@ -810,12 +827,10 @@ def _auto_discover(source: str = "bookto31") -> None:
         try:
             added = run_discover(int(main_wr_id), title, max_pages=200, source=source)
             # 신규 회차 발견(queue 추가) 시 그 소설의 메타데이터도 갱신
+            # (namu 30분 rate limit 때문에 수집 루프를 막지 않도록 백그라운드)
             if added > 0:
-                log.info(f"  {title}: 신규 {added}화 발견 → 메타데이터 갱신")
-                try:
-                    run_enrich(novel_dir.name, force=True)
-                except Exception as e:
-                    log.warning(f"  {title} 메타 갱신 실패: {e}")
+                log.info(f"  {title}: 신규 {added}화 발견 → 메타데이터 갱신(백그라운드)")
+                run_enrich_background(novel_dir.name)
         except Exception as e:
             log.warning(f"  {title} discover 실패: {e}")
 

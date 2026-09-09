@@ -4,6 +4,15 @@
 
 ## 2026-09-09 (최신)
 
+### 버그 수정: namu rate-limit 블로킹 + ETA 성능
+- **namu.wiki 30분 rate limit이 수집을 블로킹하던 문제 수정**
+  - `run_all`: ENRICH를 bulk collect **이후**로 이동 (이전엔 namu 대기 때문에 수집 시작이 최대 30분 지연)
+  - `run_enrich_background()`: namu 메타 갱신을 백그라운드 스레드로 실행 (수집 루프 비블록)
+    - `_ENRICH_LOCK`으로 동시 namu 호출 직렬화 (공유 FlareSolverr 세션 보호)
+  - `_auto_discover`: 신규 회차 발견 소설의 메타 갱신도 백그라운드로
+- **`_estimate_seconds_per_chapter` TTL 캐시(60초)**: `/pipeline/status` 3초 폴링마다
+  챕터 파일 전체를 읽던 것을 1분 1회로 제한 (CPU/IO 최적화)
+
 ### 연재 상태/메타데이터 정확도 개선 (소스 기반)
 - **상태 진실 원천 변경**: namu.wiki → **discover(소스 사이트)**
   - `_update_novel_status_from_discover()`: 신규 회차 발견(added>0) → 연재중

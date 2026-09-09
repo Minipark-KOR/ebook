@@ -8,26 +8,40 @@ ebooklib의 EPUB 생성은 **로컬 DB의 챕터 JSON 파일들을 모아서** �
 
 ### 출력
 - 형식: EPUB 3.0
-- 크기: ~9MB (557챕터 + 4개 한글 폰트 ~11MB 임베드)
-- 시간: 약 2.3초
+- 크기: ~7MB (287챕터 + 4개 한글 폰트 ~11MB 임베드)
 - 다운로드: `/api/novels/{id}/epub`
+
+### 제작/재제작 정책 (2026-09-09)
+- **제작 시점**: 전체 회차 수집이 완료된 시점 (해당 소설의 queue가 비워지는 순간)
+  - URL 수신 → `pipeline.py all` → 전체 collect 완료 → 제작
+  - 월 1일 `_auto_discover`로 새 회차 발견 → loop 수집 완료 → 재제작
+- **재제작 판정**: **fingerprint**(챕터 수 + 최고 chapter 번호 + 최신 collected_at) 비교
+  - fingerprint가 캐시와 같으면 no-op (불필요한 재빌드 없음)
+- **캐시**: `/opt/ai_data/flaresolverr/epub/{소설ID}.epub` + `{소설ID}.fingerprint.json`
+  - 다운로드는 캐시 파일을 O(1)로 서빙 (매 요청 재빌드 안 함)
+- **미제작 상태**: 캐시가 없으면 `409` — "전체 회차 수집 완료 후 생성됩니다"
 
 ## 아키텍처
 
 ```
+[파이프라인] collect 루프
+   └─ 소설 queue가 비워지는 순간
+        └─ maybe_build_epub(novel_id)
+             ├─ fingerprint 비교 (변경 없으면 no-op)
+             └─ build_epub() → EPUB_DIR/{소설ID}.epub 캐시
+                  ├─ cover webp→jpeg 변환 → cover_{소설ID}.jpg
+                  ├─ DATA_DIR/{소설ID}/*.json glob → EpubHtml 변환
+                  ├─ 4개 한글 폰트 임베드
+                  └─ 표지/타이틀 페이지(항상) + spine: cover_page→nav→chapters
+
 [요청] GET /api/novels/{소설ID}/epub
-   ↓
-[라우터] routers/novels.py - download_epub()
-   ├─ get_novel_detail() (DB 검증)
-   └─ build_epub(novel_id)  ← services/epub.py
-        ├─ DATA_DIR/{소설ID}/*.json glob
-        ├─ 각 JSON 파싱 → EpubHtml 변환
-        ├─ 4개 한글 폰트 임베드 (NotoSansKR/RIDIBatang/MaruBuri/Literata)
-        └─ EPUB 바이트 반환
-   ↓
-[응답] Content-Type: application/epub+zip
-       Content-Disposition: attachment; filename*=UTF-8''{제목}.epub
+   └─ routers/novels.py
+        ├─ get_novel_detail() (404 체크)
+        ├─ EPUB_DIR/{소설ID}.epub 존재? (없으면 409)
+        └─ FileResponse로 캐시 서빙 (Content-Type: application/epub+zip)
 ```
+
+수동 재제작: `python3 scripts/pipeline.py epub [novel_id ...]` (인자 없으면 전체 소설)
 
 ## 코드 구조
 
@@ -39,21 +53,12 @@ async def download_epub(novel_id: str):
     if not novel:
         raise HTTPException(status_code=404, detail="Novel not found")
 
-    epub_bytes = build_epub(novel_id)
-    if not epub_bytes:
-        raise HTTPException(status_code=500, detail="EPUB 생성 실패")
+    from services.epub import get_epub_cache_path
+    epub_path = get_epub_cache_path(novel_id)
+    if not epub_path.exists():
+        raise HTTPException(status_code=409, detail="EPUB이 아직 제작되지 않았습니다")
 
-    title = get_novel_title(novel_id)
-    filename = f"{title}.epub"
-
-    return Response(
-        content=epub_bytes,
-        media_type="application/epub+zip",
-        headers={
-            "Content-Disposition": f"attachment; filename*=UTF-8''{quote(filename)}",
-            "Content-Length": str(len(epub_bytes)),
-        },
-    )
+    return FileResponse(epub_path, media_type="application/epub+zip", filename=f"{title}.epub")
 ```
 
 ### services/epub.py

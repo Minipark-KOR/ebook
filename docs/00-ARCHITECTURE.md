@@ -68,6 +68,9 @@ ebooklib은 한국 웹소설을 자동으로 수집 → JSON 저장 → EPUB으�
 │  /opt/ai_data/flaresolverr/ebook_watcher/                        │
 │      ├── queue.json             (수집 큐)                         │
 │      └── pipeline_output.log    (파이프라인 로그)                  │
+│  /opt/ai_data/flaresolverr/epub/                                 │
+│      ├── {소설ID}.epub           (EPUB 캐시 — 수집 완료 시 제작)    │
+│      └── cover_{소설ID}.jpg      (표지 JPEG 변환 캐시)             │
 └─────────────────────────────────────────────────────────────────┘
 ```
 

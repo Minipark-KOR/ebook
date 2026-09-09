@@ -4,6 +4,23 @@
 
 ## 2026-09-09 (최신)
 
+### EPUB 회차 순서 버그 수정
+- **`services/epub.py::build_epub`**: 챕터 정렬이 **wr_id**(파일명) 기준이던 것을 **chapter 번호** 기준으로 수정
+  - 화산귀환(1922화가 wr_id 최소) 등에서 EPUB 챕터 순서가 뒤섞이는 문제 해결
+  - 재빌드 후 5개 소설 전부 오름차순 확인 (게임 868~897, 아포 1~287, 오늘만 477~839, 하남자 1~557, 화산 1837~1922)
+
+### EPUB 제작/재제작 정책 도입
+- **제작 시점**: 전체 회차 수집 완료 시 (해당 소설 queue가 비워지는 순간)
+  - `scripts/pipeline.py` collect 루프에 `_build_epub_for_drained_novels()` 훅 추가
+  - URL 수신(`pipeline.py all`) 전체 collect 완료, 월 1일 `_auto_discover` 후 loop 수집 완료 시 자동 재제작
+- **fingerprint 기반 재빌드 판정**: `maybe_build_epub()` — 챕터 수/최고 번호/최신 collected_at 비교, 변경 없으면 no-op
+- **디스크 캐시**: `/opt/ai_data/flaresolverr/epub/{소설ID}.epub` — 다운로드는 캐시를 O(1) 서빙
+- **표지**: webp→jpeg 변환 (Pillow) — EPUB 리더 호환성 확보, `cover_{소설ID}.jpg` 캐시
+  - 표지 이미지가 없어도 **텍스트 타이틀 페이지** 항상 생성
+- **다운로드 API**: `routers/novels.py` — 캐시 파일 `FileResponse` 서빙, 미제작 시 `409`
+- **수동 재제작**: `python3 scripts/pipeline.py epub [novel_id ...]` (인자 없으면 전체)
+- **`requirements.txt`**: `Pillow>=10.0.0` 추가
+
 ### 버그 수정 (양방향 검증 후)
 - **회차 바로가기(jump) 버그 수정** (`NovelClient.tsx`): `Math.ceil(n/20)`과 `totalChapters`(개수) 검사 제거
   - 실제 `chapter` 번호로 목록에서 위치를 찾아 페이지 계산 → 화산귀환(1854~), 게임(868~)처럼

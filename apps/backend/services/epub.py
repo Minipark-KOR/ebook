@@ -284,12 +284,25 @@ def build_epub(novel_id: str) -> Optional[bytes]:
     if not novel_dir.is_dir():
         return None
 
-    chapter_files = sorted(
-        [f for f in novel_dir.iterdir() if f.suffix == ".json" and f.stem.isdigit()],
-        key=lambda f: int(f.stem),
-    )
+    chapter_files = [
+        f for f in novel_dir.iterdir() if f.suffix == ".json" and f.stem.isdigit()
+    ]
     if not chapter_files:
         return None
+
+    # chapter 번호 기준 정렬 (wr_id 아님) — 화산귀환(1922화가 wr_id 최소) 등
+    # wr_id 순서가 회차 순서와 다른 작품 대비. chapter 없으면 wr_id 폴백.
+    def _chapter_sort_key(f: Path) -> tuple:
+        ch = _read_chapter(f) or {}
+        c = ch.get("chapter")
+        if isinstance(c, int) and c > 0:
+            return (0, c)
+        try:
+            return (1, int(f.stem))
+        except ValueError:
+            return (2, 0)
+
+    chapter_files.sort(key=_chapter_sort_key)
 
     # 메타데이터
     meta: Dict = {}

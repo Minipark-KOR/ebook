@@ -276,14 +276,15 @@ COLLECTORS = {
 ## 자동화 계층
 
 ```
-devforge-watchdog @ 60초마다     ← SERVICE_TARGETS: ebook-watcher.service 상태 체크
-ebook-watcher.service            ← Type=simple, Restart=on-failure (30초 간격)
-  └─ pipeline.py loop            ← 상시 실행 (5분 간격 챕터 수집)
+devforge-watchdog @ 60초마다     ← SERVICE_TARGETS: ebook-watcher 체크 (프로세스+로그 활동)
+ebook-watcher.service            ← Type=notify, WatchdogSec=600, Restart=on-watchdog
+  └─ pipeline.py loop            ← 상시 실행 (5분 간격 챕터 수집) + sd_notify 신호
 ```
 
-- **devforge-watchdog**이 60초마다 `ebook-watcher.service`가 살아있는지 체크, 죽으면 재시작
-- **systemd** `Restart=on-failure`로 자체 복구
-- 파이프라인 hang은 로그 갱신 없음으로 판단
+- **systemd WatchdogSec (1차)**: loop이 5분마다 `WATCHDOG=1` 신호, 10분 내 미수신 시 hang 판정 → `on-watchdog` 재시작
+- **devforge-watchdog (2차)**: 60초마다 `check_ebook_pipeline()`으로 프로세스 존재 + 마지막 로그 활동(20분) 확인, hang/죽음 시 재시작
+- **queue 무결성**: fcntl 락(collect/queue 분리) + atomic write로 다중 프로세스 동시 접근 시 race 방지
+- **실패 보존**: 3회 실패 챕터는 DLQ(failed.json)에 기록 (데이터 손실 방지)
 
 ---
 

@@ -2,7 +2,40 @@
 
 > ebooklib의 모든 주요 변경 사항. 최신이 위.
 
-## 2026-09-06 (최신)
+## 2026-09-09 (최신)
+
+### 파이프라인 안정성 강화 (업계 표준 반영)
+- **systemd WatchdogSec + on-watchdog**: `pipeline.py`에 `_sd_notify()` 추가
+  - `Type=simple` → `Type=notify`, `Restart=on-failure` → `on-watchdog`, `WatchdogSec=600`
+  - loop이 5분마다 `WATCHDOG=1` 신호 → 10분 내 미수신 시 hang 판정 후 재시작
+- **queue 파일 락 (race 방지)**: `_load_queue`/`_save_queue`에 fcntl + atomic write
+  - collect 락(`queue.collect.lock`)과 queue 락(`queue.lock`)을 **별도 파일로 분리**
+  - flock이 같은 fd에 두 번째 flock을 걸면 이전 락을 대체하는 버그 수정
+  - `run_collect` 전체를 단일 writer 락으로 직렬화 (toki31/bookto31 상호 덮어쓰기 방지)
+- **DLQ (실패 항목 보존)**: `_add_to_dlq()` 추가
+  - 3회 실패 챕터를 `failed.json`에 기록 후 queue에서 제거 (최대 5000개)
+- **적응형 딜레이**: 고정 5분 → `10 × fetch 시간`
+  - bookto31: `max(300, fetch×10)` 최소 5분 / 최대 10분 (Cloudflare 보호)
+  - toki31: `max(5, min(60, fetch×10))` — 한번에 다 받는 형식
+- **discover 전체 회차 확인**: max_pages 8/50 → 200 (epage/spage 모두 순회)
+  - 백엔드 `/pipeline/start`도 max_pages 200, timeout 1500s
+  - 월 1회 auto-discover가 전체 회차 정확히 확인
+- **커밋**: `6cdda03`(hardening) → `5cdd0c4`(락 분리 수정) → `d44a7e6`(문서)
+
+### watchdog (devforge) ebook 전용 감시
+- `/opt/projects/server/scripts/lib/watchdog/checker.py`: `check_ebook_pipeline()` 추가
+  - systemd active + `pipeline.py loop` 프로세스 존재 + 마지막 로그 활동(20분) 확인
+  - `check_all_services()`에서 ebook-watcher만 전용 체크 사용
+- `config.py`: `ebook-watcher.timer` TIMER_TARGETS 제거 (15분 로직 삭제)
+- watchdog이 메인으로 ebook 파이프라인을 감시/관리 (이중 감시: systemd + watchdog)
+
+### 수집 데이터 복구
+- **아포칼립스의 고인물** (toki31, novel_id 58455): 전체 287화 수집 완료
+  - 기존 101개 → 287개 (누락 186개 재수집)
+- **화산귀환** (bookto31): 전체 회차 확인 (spage 순회) → queue에 1900+개
+- **당문출사**: 테스트 데이터 삭제
+
+## 2026-09-06
 
 ### 공통 레이어 리팩터링 (Phase 1~5 + 잔여 caller 이관)
 - **`lib/user_agent.py`** (신규): Chrome 헤더 빌더 (`chrome_headers()`, `namu_headers()`)

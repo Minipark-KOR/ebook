@@ -23,11 +23,12 @@ python3 /opt/workspace/ebooklib/scripts/ebook_watcher/ebook_queue.py add 21988 "
 python3 /opt/workspace/ebooklib/scripts/ebook_watcher/ebook_queue.py list
 
 # 자동 처리:
-# - ebook-watcher.timer @ *:0/15 → 워커 실행
-# - 북토끼에서 fetch (5분 챕터 간 안전 지연, 재시도 3회)
+# - ebook-watcher.service (systemd)가 pipeline.py loop 상시 실행
+# - systemd WatchdogSec(10분) + devforge-watchdog(60초) 이중 감시
+# - 북토끼에서 fetch (적응형 딜레이: 10×fetch시간, 최소 5분, 재시도 3회)
 # - DB에 저장
 # - status.json에 결과 기록
-# - 5회 실패 시 큐에서 자동 제거
+# - 3회 실패 시 DLQ(failed.json)에 보존 후 큐에서 제거
 ```
 
 **수동 절차** (자동화 없이 직접 처리):
@@ -422,19 +423,61 @@ systemctl --user restart ebook-watcher.service
 journalctl --user -u devforge-watchdog.service --since "10 min ago" | grep -i ebook
 ```
 
-**증상**: 5회 실패한 챕터가 큐에 계속 남아있음 (정상 동작)
+### DLQ (실패 챕터) 재시도
+
+3회 시도 후 실패한 챕터는 `queue.json`에서 제거되고 `failed.json`(DLQ)에 보존된다.
 
 ```bash
-# 큐 확인 - attempts가 5 이상이고 last_error가 있으면 자동 제거됨
+# DLQ 확인
 python3 -c "
 import json
-with open('/opt/ai_data/flaresolverr/ebook_watcher/queue.json') as f:
-    queue = json.load(f)
-for item in queue:
-    if item.get('attempts', 0) >= 5:
-        print(f\"영구 실패: {item}\")
+with open('/opt/ai_data/flaresolverr/ebook_watcher/failed.json') as f:
+    failed = json.load(f)
+print(f'실패 챕터: {len(failed)}개')
+for item in failed[-5:]:
+    print(f\"  {item.get('novel_title')} wr_id={item.get('wr_id')} err={item.get('error')}\")
 "
 ```
+
+**DLQ → 큐 재삽입 (재시도)**:
+
+```bash
+python3 -c "
+import json
+failed = json.load(open('/opt/ai_data/flaresolverr/ebook_watcher/failed.json'))
+queue = json.load(open('/opt/ai_data/flaresolverr/ebook_watcher/queue.json'))
+existing = {item['wr_id'] for item in queue}
+reinserted = 0
+for item in failed:
+    if item['wr_id'] not in existing:
+        queue.append({
+            'wr_id': item['wr_id'],
+            'novel_title': item['novel_title'],
+            'chapter': item.get('chapter'),
+            'source': item.get('source', 'bookto31'),
+            'priority': 1,
+            'added_at': '2026-01-01T00:00:00+00:00',
+            'attempts': 0,
+            'last_error': None,
+        })
+        existing.add(item['wr_id'])
+        reinserted += 1
+json.dump(queue, open('/opt/ai_data/flaresolverr/ebook_watcher/queue.json', 'w'), ensure_ascii=False, indent=2)
+print(f'{reinserted}개 재삽입')
+"
+```
+
+### queue 파일 락 확인
+
+`queue.json`은 fcntl 락(`queue.lock`, `queue.collect.lock`) + atomic write로
+다중 프로세스 동시 접근 시 race를 방지한다. 락 파일이 정상 생성됐는지 확인:
+
+```bash
+ls -la /opt/ai_data/flaresolverr/ebook_watcher/*.lock
+```
+
+> 참고: fcntl은 **프로세스 단위 락**이라, 같은 프로세스 내 스레드 간에는 직렬화하지 않는다.
+> 이 시스템은 프로세스 단위(bookto31 loop / toki31 collect)로 운영되므로 정상 동작한다.
 
 ## 다음 문서
 - [00-ARCHITECTURE.md](00-ARCHITECTURE.md) - 시스템 전체 이해

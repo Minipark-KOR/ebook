@@ -242,13 +242,15 @@ def run_collect(limit: int = 0, source_filter: str = "") -> dict:
     limit: 최대 처리할 챕터 수 (0=무제한)
     source_filter: 특정 source만 처리 (빈 문자열=전체)
     """
-    queue = _load_queue()
-    if not queue:
+    full_queue = _load_queue()
+    if not full_queue:
         return {"processed": 0, "errors": [], "remaining": 0}
 
-    # source 필터
+    # source 필터 (처리 대상만 선택. 전체 queue는 유지)
     if source_filter:
-        queue = [item for item in queue if item.get('source', 'bookto31') == source_filter]
+        queue = [item for item in full_queue if item.get('source', 'bookto31') == source_filter]
+    else:
+        queue = list(full_queue)
 
     if not queue:
         return {"processed": 0, "errors": [], "remaining": 0}
@@ -257,6 +259,8 @@ def run_collect(limit: int = 0, source_filter: str = "") -> dict:
     errors = []
     max_run = limit if limit > 0 else len(queue)
     total = len(queue)
+    # 처리/제거된 wr_id 추적 (전체 queue에서 제거)
+    removed_ids = set()
 
     for i in range(min(max_run, len(queue))):
         item = queue[i]
@@ -288,7 +292,7 @@ def run_collect(limit: int = 0, source_filter: str = "") -> dict:
         if not collector:
             log.warning(f"  ✗ 알 수 없는 source: {source}")
             errors.append({"wr_id": wr_id, "error": f"Unknown source: {source}"})
-            queue = [q for q in queue if q['wr_id'] != wr_id]
+            removed_ids.add(wr_id)
             continue
 
         # 3회 재시도
@@ -307,17 +311,18 @@ def run_collect(limit: int = 0, source_filter: str = "") -> dict:
             item['last_error'] = f"3회 시도 후 실패 (body={len(body) if body else 0})"
             log.warning(f"  ✗ {item['last_error']}")
             if item['attempts'] >= 3:
-                queue = [q for q in queue if q['wr_id'] != wr_id]
+                removed_ids.add(wr_id)
             errors.append({"wr_id": wr_id, "error": item['last_error']})
             continue
 
         # 저장 (enrich/index 없이 순수 저장)
         chapter_num = item.get('chapter') or chapter_num
         _save_chapter_only(novel_title, wr_id, body, chapter_num, source)
-        log.info(f"  ✓ wr_id={wr_id} 저장 완료 ({len(body)} chars)")
+        _body_len = body[1] if isinstance(body, tuple) and len(body) == 2 else body
+        log.info(f"  ✓ wr_id={wr_id} 저장 완료 ({len(_body_len)} chars)")
 
-        # 큐에서 제거
-        queue = [q for q in queue if q['wr_id'] != wr_id]
+        # 큐에서 제거 (전체 queue 기준)
+        removed_ids.add(wr_id)
         processed += 1
 
         # 다음 챕터 전 대기
@@ -325,18 +330,20 @@ def run_collect(limit: int = 0, source_filter: str = "") -> dict:
             log.info(f"  {CHAPTER_DELAY_SEC}초 대기...")
             time.sleep(CHAPTER_DELAY_SEC)
 
-    _save_queue(queue)
-    log.info(f"collect 완료: {processed}개 처리, {len(queue)}개 남음")
+    # 전체 queue에서 처리/실패 제거된 항목만 제거하고 저장
+    remaining_queue = [q for q in full_queue if q['wr_id'] not in removed_ids]
+    _save_queue(remaining_queue)
+    log.info(f"collect 완료: {processed}개 처리, {len(remaining_queue)}개 남음")
     _write_status({
         "phase": "collect",
         "current": None,
         "index": total,
         "total": total,
-        "remaining": len(queue),
+        "remaining": len(remaining_queue),
         "processed": processed,
-        "last_result": {"processed": processed, "errors": len(errors), "remaining": len(queue)},
+        "last_result": {"processed": processed, "errors": len(errors), "remaining": len(remaining_queue)},
     })
-    return {"processed": processed, "errors": errors, "remaining": len(queue)}
+    return {"processed": processed, "errors": errors, "remaining": len(remaining_queue)}
 
 
 # === 3단계: ENRICH — namu.wiki 메타데이터 보강 ===

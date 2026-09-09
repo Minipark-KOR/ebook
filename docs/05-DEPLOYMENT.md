@@ -292,6 +292,9 @@ StandardOutput=journal
 StandardError=journal
 ```
 
+> **소스 설정**: `apps/backend/sources.json`에서 수집 소스를 관리 (도메인/base_url/collector/discover/speed).
+> 새 소스 추가 또는 도메인 변경은 이 파일만 수정하면 되고, 재시작이면 반영된다.
+
 ### 등록 명령
 ```bash
 systemctl --user daemon-reload

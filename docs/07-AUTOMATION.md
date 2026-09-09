@@ -73,15 +73,21 @@ After=network-online.target svc-pod.service container-flaresolverr.service
 Wants=network-online.target
 
 [Service]
-Type=simple                                                        # 상시 실행
+Type=notify                                                        # sd_notify (READY=1 + WATCHDOG=1)
 EnvironmentFile=/home/opc/.config/devforge/secrets.env
 WorkingDirectory=/opt/workspace/ebooklib
-ExecStart=.../venv/bin/python3 .../scripts/pipeline.py loop "오늘만 사는 기사"
-Restart=on-failure                                                 # 실패 시 재시작
+ExecStart=.../venv/bin/python3 .../scripts/pipeline.py loop --source bookto31
+WatchdogSec=600                                                    # 10분 내 신호 없으면 hang
+Restart=on-watchdog                                                # hang/실패 시 재시작
 RestartSec=30                                                      # 30초 후 재시도
 StandardOutput=journal
 StandardError=journal
 ```
+
+> **Watchdog 동작**: `pipeline.py loop`이 각 사이클(5분)마다 `_sd_notify()`로
+> `WATCHDOG=1` 신호를 systemd에 보낸다. 10분(WatchdogSec) 내 신호가 없으면
+> systemd가 프로세스를 hang으로 판단하고 `on-watchdog`으로 재시작한다.
+> (기존 devforge-watchdog의 로그 기반 감지는 fallback으로 유지)
 
 ## 4. 안전 장치
 
@@ -89,18 +95,19 @@ StandardError=journal
 
 | 장치 | 작동 |
 |---|---|
-| **챕터 간 5분 지연** | 사이트가 짧은 시간 내 반복 요청 시 의심 |
-| **재시도 3회 (8분 간격)** | 같은 URL에 대한 빠른 반복 요청 방지 |
+| **챕터 간 적응형 지연** | 10×fetch 시간, bookto31 최소 5분 / toki31 5~60초 |
+| **재시도 3회** | 같은 URL에 대한 빠른 반복 요청 방지 |
 | **rate_limiter DB** | URL별 마지막 요청 시각 기록, 8분 + ±2분 jitter |
 | **FlareSolverr session 재사용** | 매번 새 세션 만들면 부담, 같은 세션으로 효율화 |
-| **3회 실패 시 큐 제거** | 영구 실패 챕터는 큐에서 자동 제거 |
+| **3회 실패 시 DLQ 기록** | failed.json에 보존 (데이터 손실 방지, 최대 5000개) |
 
 ### 시스템 보호 장치
 
 | 장치 | 작동 |
 |---|---|
-| **systemd Restart=on-failure** | 파이프라인 프로세스 죽으면 30초 후 자동 재시작 |
-| **devforge-watchdog 60초 체크** | systemd 서비스까지 죽으면 강제 재시작 |
+| **systemd WatchdogSec + on-watchdog** | 10분 내 sd_notify 신호 없으면 hang 판정 후 재시작 |
+| **devforge-watchdog 60초 체크** | 프로세스 + 로그 활동(20분) 확인, hang/죽음 시 재시작 |
+| **queue 파일 락** | fcntl + atomic write, run_collect 단일 writer 직렬화 (동시 덮어쓰기 방지) |
 | **Backoff schedule (CrashLoopBackOff)** | 반복 실패 시 0→10→20→40→80→120→300초 대기 |
 | **namu_attempted 플래그** | namu.wiki 메타데이터 1회만 조회 (hang 방지) |
 
@@ -108,8 +115,10 @@ StandardError=journal
 
 | 상황 | 복구 | 시간 |
 |------|------|------|
-| 파이프라인 프로세스 죽음 | systemd Restart=on-failure | 30초 |
-| systemd 서비스 멈춤 | devforge-watchdog 감지 | 60초 |
+| 파이프라인 프로세스 hang (10분 무응답) | systemd WatchdogSec → on-watchdog 재시작 | 10분 |
+| 파이프라인 프로세스 죽음 | systemd on-watchdog / devforge-watchdog 감지 | 30~60초 |
+| 파이프라인 hang (로그 20분 없음) | devforge-watchdog 로그 기반 감지 | 20분 |
+| 3회 실패 챕터 | DLQ(failed.json) 기록, 사후 재시도 가능 | 즉시 |
 | FlareSolverr 다운 | FlareSolverrSession 재시도 (3회) | ~6초 |
 | 북토끼 403 응답 | rate limiter 대기 후 재시도 | 8분 |
 | namu.wiki hang | namu_attempted 플래그로 1회만 시도 | - |

@@ -5,8 +5,6 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { ChapterDetail } from "@/lib/api";
 
-const PAGE_SIZE = 20;
-
 export default function ChapterClient({
   novelId,
   chapter,
@@ -18,10 +16,6 @@ export default function ChapterClient({
   const [fontSize, setFontSize] = useState(18);
   const [navOpen, setNavOpen] = useState(false);
   const navOpenRef = useRef(false);
-
-  const listPage = chapter
-    ? Math.max(1, Math.ceil(chapter.chapter / PAGE_SIZE))
-    : null;
 
   // Close overlay with ESC
   useEffect(() => {
@@ -50,7 +44,8 @@ export default function ChapterClient({
 
   function buildListHref(focusChapter: number): string {
     const params = new URLSearchParams();
-    if (listPage && listPage > 1) params.set("page", String(listPage));
+    // 페이지는 NovelClient가 focus 챕터의 실제 위치로 계산한다.
+    // chapter 번호가 1부터 시작하지 않는 작품(화산귀환 등)에서도 올바르게 동작.
     params.set("focus", String(focusChapter));
     const qs = params.toString();
     return `/novel/${novelId}${qs ? `?${qs}` : ""}`;

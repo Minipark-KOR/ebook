@@ -18,10 +18,18 @@ export default function NovelClient({
 }) {
   const searchParams = useSearchParams();
   const router = useRouter();
-  const initialPage = Math.max(1, Number(searchParams.get("page")) || 1);
-  const initialFocus = Number(searchParams.get("focus")) || null;
 
-  const [page, setPage] = useState(initialPage);
+  // focus 챕터가 있으면 그 챕터가 위치한 페이지를 우선 사용.
+  // (chapter 번호가 1부터 연속적이지 않은 작품에서도 올바르게 동작)
+  const requestedPage = Math.max(1, Number(searchParams.get("page")) || 1);
+  const initialFocus = Number(searchParams.get("focus")) || null;
+  const focusIndex = initialFocus
+    ? chapters.findIndex((c) => c.chapter === initialFocus)
+    : -1;
+  const focusPage =
+    focusIndex >= 0 ? Math.floor(focusIndex / PAGE_SIZE) + 1 : null;
+
+  const [page, setPage] = useState(focusPage ?? requestedPage);
   const [jumpInput, setJumpInput] = useState("");
   const [jumpError, setJumpError] = useState<string | null>(null);
   const [pendingJumpChapter, setPendingJumpChapter] = useState<number | null>(initialFocus);
@@ -38,7 +46,7 @@ export default function NovelClient({
     if (!el) return;
     el.scrollIntoView({ behavior: "smooth", block: "center" });
     setPendingJumpChapter(null);
-  }, [pendingJumpChapter]);
+  }, [pendingJumpChapter, page]);
 
   // Sync page to URL
   useEffect(() => {

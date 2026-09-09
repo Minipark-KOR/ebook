@@ -213,21 +213,16 @@ def sync_novel(novel_id: str, novel_dir: Path) -> bool:
         )
 
         # 2) 모든 챕터 UPSERT (batch)
-        # 작품별 기본 wr_id offset (하남자의 탑은 21430 = 작품 메인, 21431 = 1화)
-        # 다른 소설은 패턴이 다르지만, wr_id - 작품_메인_wr_id로 추정
-        novel_main_wr_id = _guess_novel_main_wr_id(novel_id, meta)
         chapter_data = []
         for ch_file in chapter_files:
             with open(ch_file, "r", encoding="utf-8") as f:
                 ch = json.load(f)
             wr_id_int = ch.get("wr_id", int(ch_file.stem))
             chapter = ch.get("chapter")
-            # chapter가 None이면 wr_id에서 추정
-            if chapter is None and novel_main_wr_id and wr_id_int:
-                est = wr_id_int - novel_main_wr_id
-                if 1 <= est <= 10000:
-                    chapter = est
-            chapter = chapter or 0
+            # chapter가 None/0이면 wr_id 순서 기반 추정이 아니라,
+            # 정확한 값이 없으면 chapter를 쓰지 않고 0으로 남긴다.
+            # (이전에는 wr_id - main_wr_id 추정으로 잘못된 번호가 저장됨)
+            chapter = chapter if isinstance(chapter, int) and chapter > 0 else 0
 
             chapter_data.append((
                 wr_id_int,
@@ -342,13 +337,13 @@ def query_chapters_from_neon(novel_id: str, page: int = 1, limit: int = 20) -> d
             (novel_id,),
         )
         total = cur.fetchone()[0]
-        # 페이지네이션
+        # 페이지네이션 (chapter 번호 기준 정렬 — wr_id가 아니라)
         offset = (page - 1) * limit
         cur.execute("""
             SELECT wr_id, chapter, title, content_length
             FROM ebook_chapters
             WHERE novel_id = %s
-            ORDER BY wr_id
+            ORDER BY chapter ASC
             LIMIT %s OFFSET %s
         """, (novel_id, limit, offset))
         rows = cur.fetchall()
@@ -394,23 +389,23 @@ def query_chapter_from_neon(wr_id: int) -> Optional[dict]:
         if not row:
             return None
 
-        # 이전/다음 챕터 (novel_id 기준)
+        # 이전/다음 챕터 (novel_id 기준, chapter 번호 순서)
         try:
             conn = psycopg2.connect(conn_str)
             cur = conn.cursor()
             cur.execute("""
                 SELECT wr_id FROM ebook_chapters
-                WHERE novel_id = %s AND wr_id < %s
-                ORDER BY wr_id DESC LIMIT 1
-            """, (row[1], wr_id))
+                WHERE novel_id = %s AND chapter < %s
+                ORDER BY chapter DESC LIMIT 1
+            """, (row[1], row[2]))
             prev_row = cur.fetchone()
             prev_chapter = prev_row[0] if prev_row else None
 
             cur.execute("""
                 SELECT wr_id FROM ebook_chapters
-                WHERE novel_id = %s AND wr_id > %s
-                ORDER BY wr_id ASC LIMIT 1
-            """, (row[1], wr_id))
+                WHERE novel_id = %s AND chapter > %s
+                ORDER BY chapter ASC LIMIT 1
+            """, (row[1], row[2]))
             next_row = cur.fetchone()
             next_chapter = next_row[0] if next_row else None
             cur.close()

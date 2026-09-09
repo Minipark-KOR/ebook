@@ -85,16 +85,16 @@ async function proxyToNeon(req: NextRequest, slug: string[]): Promise<NextRespon
         return NextResponse.json({ detail: 'Not found' }, { status: 404 });
       }
       const row = rows[0];
-      // 이전/다음 회차
+      // 이전/다음 회차 (chapter 번호 순서 — wr_id 아님)
       const prevRows = await neonQuery(
         `SELECT wr_id FROM ebook_chapters
-         WHERE novel_id = $1 AND wr_id < $2 ORDER BY wr_id DESC LIMIT 1`,
-        [row.novel_id, wrId]
+         WHERE novel_id = $1 AND chapter < $2 ORDER BY chapter DESC LIMIT 1`,
+        [row.novel_id, row.chapter]
       );
       const nextRows = await neonQuery(
         `SELECT wr_id FROM ebook_chapters
-         WHERE novel_id = $1 AND wr_id > $2 ORDER BY wr_id ASC LIMIT 1`,
-        [row.novel_id, wrId]
+         WHERE novel_id = $1 AND chapter > $2 ORDER BY chapter ASC LIMIT 1`,
+        [row.novel_id, row.chapter]
       );
       return NextResponse.json({
         wr_id: Number(row.wr_id),
@@ -265,13 +265,13 @@ async function proxyNovelChapters(req: NextRequest, slug: string[]): Promise<Nex
     );
     const total = parseInt(countRows[0]?.total || 0);
 
-    // 페이지네이션
+    // 페이지네이션 (chapter 번호 기준 정렬 — wr_id 아님)
     const offset = (page - 1) * limit;
     const rows = await neonQuery(
       `SELECT wr_id, chapter, title, content_length
        FROM ebook_chapters
        WHERE novel_id = $1
-       ORDER BY wr_id
+       ORDER BY chapter ASC
        LIMIT $2 OFFSET $3`,
       [novelId, limit, offset]
     );

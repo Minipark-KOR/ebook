@@ -87,7 +87,7 @@ def get_novel_list() -> list[dict]:
     """소설 목록 조회"""
     novels = []
     for novel_dir in DATA_DIR.iterdir():
-        if novel_dir.is_dir():
+        if novel_dir.is_dir() and not novel_dir.name.startswith("."):
             meta_file = novel_dir / "meta.json"
             if meta_file.exists():
                 with open(meta_file, "r", encoding="utf-8") as f:
@@ -181,7 +181,7 @@ def extract_images_from_content(content: str) -> list[str]:
 def get_chapter_detail(wr_id: int) -> Optional[dict]:
     """회차 상세 조회"""
     for novel_dir in DATA_DIR.iterdir():
-        if novel_dir.is_dir():
+        if novel_dir.is_dir() and not novel_dir.name.startswith("."):
             chapter_file = novel_dir / f"{wr_id}.json"
             if not chapter_file.exists() or chapter_file.name in ("meta.json", CHAPTERS_INDEX_FILE):
                 continue

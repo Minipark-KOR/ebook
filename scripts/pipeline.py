@@ -567,6 +567,7 @@ def _load_queue() -> list:
 
 
 _QUEUE_LOCK_FILE = None
+_COLLECT_LOCK_FILE = None
 
 
 def _queue_lock():
@@ -577,10 +578,24 @@ def _queue_lock():
     return _QUEUE_LOCK_FILE
 
 
+def _collect_lock():
+    """run_collect 전용 락 파일 — queue.lock과 분리해 중첩 flock 무력화 방지.
+
+    fcntl은 같은 프로세스에서 같은 fd에 flock을 걸면 이전 락을 대체한다.
+    따라서 _acquire_collect_lock(LOCK_EX) 상태에서 _load_queue가 같은 fd에
+    LOCK_SH를 걸면 collect 락이 다운그레이드/해제되는 심각한 버그가 있다.
+    별도 파일로 분리해 이 문제를 해결한다.
+    """
+    global _COLLECT_LOCK_FILE
+    if _COLLECT_LOCK_FILE is None:
+        _COLLECT_LOCK_FILE = open(QUEUE_FILE.with_suffix('.collect.lock'), 'w')
+    return _COLLECT_LOCK_FILE
+
+
 def _acquire_collect_lock():
     """run_collect 전체 트랜잭션 락 — 두 프로세스가 동시에 queue를 처리하지 못하게."""
     import fcntl
-    fcntl.flock(_queue_lock(), fcntl.LOCK_EX)
+    fcntl.flock(_collect_lock(), fcntl.LOCK_EX)
     return True
 
 
@@ -588,7 +603,7 @@ def _release_collect_lock():
     """run_collect 트랜잭션 락 해제."""
     import fcntl
     try:
-        fcntl.flock(_queue_lock(), fcntl.LOCK_UN)
+        fcntl.flock(_collect_lock(), fcntl.LOCK_UN)
     except Exception:
         pass
 

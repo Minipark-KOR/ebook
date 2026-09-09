@@ -10,24 +10,21 @@
 
 **자동 워크플로우**:
 ```bash
-# 1. 큐에 새 챕터 추가
-python3 /opt/workspace/ebooklib/scripts/ebook_watcher/ebook_queue.py add <wr_id> "소설 제목"
+# 1. 작품 메인 wr_id로 discover → 큐 등록 (신규/누락 회차 발견)
+python3 /opt/workspace/ebooklib/scripts/pipeline.py discover <main_wr_id> "소설 제목"
 
-# 예: 하남자의 탑 공략법 새 회차
-python3 /opt/workspace/ebooklib/scripts/ebook_watcher/ebook_queue.py add 21988 "하남자의 탑 공략법"
+# 예: 하남자의 탑 공략법 (main_wr_id=21430)
+python3 /opt/workspace/ebooklib/scripts/pipeline.py discover 21430 "하남자의 탑 공략법"
 
-# 2. (선택) 우선순위 지정 - 낮을수록 먼저 처리
-python3 /opt/workspace/ebooklib/scripts/ebook_watcher/ebook_queue.py add 21988 "하남자의 탑 공략법" 1
-
-# 3. 큐 확인
-python3 /opt/workspace/ebooklib/scripts/ebook_watcher/ebook_queue.py list
+# 또는 Admin 페이지 (https://miniebook.vercel.app/admin)에서 URL 입력
+# 또는 전체 체인 실행:
+# python3 /opt/workspace/ebooklib/scripts/pipeline.py all <main_wr_id> "소설 제목"
 
 # 자동 처리:
 # - ebook-watcher.service (systemd)가 pipeline.py loop 상시 실행
 # - systemd WatchdogSec(10분) + devforge-watchdog(60초) 이중 감시
-# - 북토끼에서 fetch (적응형 딜레이: 10×fetch시간, 최소 5분, 재시도 3회)
-# - DB에 저장
-# - status.json에 결과 기록
+# - discover로 큐에 등록된 회차를 collect → JSON 저장
+# - index(인덱스 캐시) 재구축 → revalidate(Vercel ISR 갱신)
 # - 3회 실패 시 DLQ(failed.json)에 보존 후 큐에서 제거
 ```
 
@@ -332,61 +329,50 @@ git log --oneline -10
 git remote -v
 ```
 
-## 자동화 시스템 (ebook-watcher) 작업
+## 자동화 시스템 (pipeline loop) 작업
 
 ### 18. 큐 관리 CLI
 
 ```bash
-# 챕터 추가
-python3 /opt/workspace/ebooklib/scripts/ebook_watcher/ebook_queue.py add <wr_id> "소설 제목"
+# 신규/누락 회차 discover (큐에 등록)
+python3 /opt/workspace/ebooklib/scripts/pipeline.py discover <main_wr_id> "소설 제목"
 
-# 우선순위와 함께 (낮을수록 먼저)
-python3 /opt/workspace/ebooklib/scripts/ebook_watcher/ebook_queue.py add 21988 "제목" 1
+# 전체 체인 (discover → collect → enrich → index → revalidate)
+python3 /opt/workspace/ebooklib/scripts/pipeline.py all <main_wr_id> "소설 제목"
 
-# 큐 목록 보기
-python3 /opt/workspace/ebooklib/scripts/ebook_watcher/ebook_queue.py list
+# collect 단계만 (큐 처리)
+python3 /opt/workspace/ebooklib/scripts/pipeline.py collect --limit 5 --source bookto31
 
-# 상태 (마지막 실행 결과)
-python3 /opt/workspace/ebooklib/scripts/ebook_watcher/ebook_queue.py status
-
-# 특정 챕터 제거
-python3 /opt/workspace/ebooklib/scripts/ebook_watcher/ebook_queue.py remove <wr_id>
-
-# 큐 전체 비우기 (주의)
-python3 /opt/workspace/ebooklib/scripts/ebook_watcher/ebook_queue.py clear
+# 큐 상태
+cat /opt/ai_data/flaresolverr/ebook_watcher/queue.json | python3 -m json.tool
 ```
 
-### 19. 워처/워커 상태 확인
+### 19. 파이프라인 루프 상태 확인
 
 ```bash
-# 타이머 상태 (다음 실행 시각)
-systemctl --user status ebook-watcher.timer
-systemctl --user list-timers ebook-watcher.timer
-
-# 서비스 상태
+# 서비스 상태 (Type=notify + WatchdogSec=600)
 systemctl --user status ebook-watcher.service
 
 # 실시간 로그
 journalctl --user -u ebook-watcher.service -f
 
-# 워커 로그 직접
-tail -f /opt/ai_data/flaresolverr/ebook_watcher/watcher.log
+# 파이프라인 로그 직접
+tail -f /opt/ai_data/flaresolverr/ebook_watcher/pipeline_output.log
 
-# 락 파일 ( stale 체크)
-ls -la /opt/ai_data/flaresolverr/ebook_watcher/worker.lock
-
-# 큐 + 상태
-cat /opt/ai_data/flaresolverr/ebook_watcher/queue.json | python3 -m json.tool
+# 수집 진행/상태
 cat /opt/ai_data/flaresolverr/ebook_watcher/status.json | python3 -m json.tool
+
+# 실패(DLQ) 확인
+cat /opt/ai_data/flaresolverr/ebook_watcher/failed.json | python3 -m json.tool
 ```
 
-### 20. 워커 수동 실행 (테스트)
+### 20. collect 수동 실행 (테스트)
 
 ```bash
-# 큐의 모든 작업을 즉시 처리 (안전 지연 무시)
+# 큐의 일부를 즉시 처리 (안전 지연 무시)
 cd /opt/workspace/ebooklib/apps/backend
 source venv/bin/activate
-python3 /opt/workspace/ebooklib/scripts/ebook_watcher/ebook_worker.py
+python3 /opt/workspace/ebooklib/scripts/pipeline.py collect --limit 1 --source bookto31
 ```
 
 ### 21. devforge-watchdog 통합 확인

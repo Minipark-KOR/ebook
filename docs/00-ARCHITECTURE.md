@@ -168,7 +168,7 @@ COLLECTORS = {
 │   app/novel/[id]/  │
 │     page.tsx (ISR) │
 └─────────┬──────────┘
-          │ GET /api/novels/{id} (devforge 폴백)
+          │ GET /api/novels/{id} (devforge 직접)
           ▼
 ┌────────────────────┐
 │ Vercel /api/[...]  │ ← catch-all 프록시 (모든 요청 devforge로 프록시)
@@ -209,6 +209,18 @@ COLLECTORS = {
 ---
 
 ## 데이터 라이프사이클
+
+### 0. 회차 번호(chapter) 무결성 — "1화→2화" 탐색의 핵심
+
+웹 UI의 "1화→2화", 이전/다음 화, 회차 목록 정렬은 모두 각 챕터 JSON의 `chapter` 필드에 의존한다.
+
+- **정렬 기준**: 이전/다음 화와 회차 목록은 **`chapter` 번호** 기준으로 정렬한다 (wr_id 아님).
+  - `services/data.py` — `get_chapter_detail()`의 prev/next와 `rebuild_chapters_index()`가 chapter 기준 정렬
+  - wr_id 정렬은 화산귀환(1922화가 wr_id 최소)처럼 wr_id 순서 ≠ 회차 순서인 작품에서 깨진다.
+- **저장 시 폴백 금지**: `lib/storage.py::save_chapter()`는 회차번호 추출 실패 시 **wr_id로 폴백하지 않고 `chapter=None`**을 유지한다.
+  - 이전 버그: `chapter = wr_id` 폴백 → `chapter`/`title`이 "5784625화"처럼 오염 → 목록/탐색 파괴 (아포칼립스의_고인물 186개 발생, 2026-09-09 수정)
+- **프론트엔드 페이지 계산**: "회차 목록으로 돌아가기"는 `ceil(chapter/20)`이 아니라 focus 챕터의 **실제 목록 위치**로 페이지를 계산한다 (`NovelClient.tsx`).
+  - 챕터 번호가 1부터 시작하지 않는 작품(화산귀환 1854~)에서도 정상 동작.
 
 ### 1. 수집 단계 (파이프라인)
 

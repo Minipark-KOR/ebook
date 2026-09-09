@@ -69,18 +69,17 @@ export default function NovelClient({
       setJumpError("회차 번호는 1 이상의 정수여야 합니다");
       return;
     }
-    if (novel && n > novel.totalChapters) {
-      setJumpError(`총 ${novel.totalChapters}화까지만 있습니다`);
+    // 실제 회차 번호(chapter) 기준으로 목록에서 위치를 찾는다.
+    // (chapter가 1부터 연속적이지 않은 작품: 화산귀환 1854~, 게임 868~)
+    const idx = chapters.findIndex((c) => c.chapter === n);
+    if (idx === -1) {
+      setJumpError(`${n}화를 찾을 수 없습니다`);
       return;
     }
-    const targetPage = Math.ceil(n / PAGE_SIZE);
+    const targetPage = Math.floor(idx / PAGE_SIZE) + 1;
     setJumpInput("");
-    if (targetPage !== page) {
-      setPendingJumpChapter(n);
-      setPage(targetPage);
-    } else {
-      setPendingJumpChapter(n);
-    }
+    setPendingJumpChapter(n);
+    setPage(targetPage);
   }
 
   if (!novel) {
@@ -165,7 +164,6 @@ export default function NovelClient({
               id="jump-input"
               type="number"
               min={1}
-              max={novel.totalChapters}
               value={jumpInput}
               onChange={(e) => setJumpInput(e.target.value)}
               placeholder="회차 번호"

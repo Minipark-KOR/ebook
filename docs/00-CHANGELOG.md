@@ -4,6 +4,15 @@
 
 ## 2026-09-09 (최신)
 
+### 버그 수정 (양방향 검증 후)
+- **회차 바로가기(jump) 버그 수정** (`NovelClient.tsx`): `Math.ceil(n/20)`과 `totalChapters`(개수) 검사 제거
+  - 실제 `chapter` 번호로 목록에서 위치를 찾아 페이지 계산 → 화산귀환(1854~), 게임(868~)처럼
+    1부터 시작하지 않는 작품에서도 "회차 바로가기" 정상 동작
+- **게임_속_바바리안으로_살아남기 중복 제거**: wr_id 42424.json이 43353.json과 동일 내용(891화) 중복
+  - 42424(legacy, source=None) 삭제, 43353(pipeline 수집) 유지 → 30개 회차로 정리
+  - meta.json의 잘못된 `main_wr_id=42424`(실제로는 챕터 파일) 제거
+- **`data.py`**: `get_novel_list()`의 사용하지 않는 `first_chapter` 변수 제거 (ruff clean)
+
 ### Neon DB 의존성 제거
 - **정책 변경**: Neon DB 사용 중단 → 모든 데이터를 devforge 백엔드(파일시스템)에서 직접 제공
 - **`app/api/[...slug]/route.ts`**: `proxyToNeon()`/`proxyNovelChapters()` 제거, 모든 경로 devforge 프록시로 단순화

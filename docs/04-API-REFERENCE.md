@@ -3,8 +3,8 @@
 > 백엔드 FastAPI가 제공하는 모든 엔드포인트.
 
 ## Base URL
-- 개발: `http://localhost:8000`
-- 프로덕션: `https://miniebook.vercel.app`
+- 개발: `http://127.0.0.1:8089` (devforge FastAPI)
+- 프로덕션: `https://miniebook.vercel.app` (Vercel catch-all → devforge 프록시)
 
 ## 응답 형식
 - JSON
@@ -114,8 +114,9 @@
 ```
 
 **참고**:
-- `chapter`: 북토끼에서 직접 수집한 챕터는 `null` (wr_id-21430 매핑 실패)
-- `prevChapter`/`nextChapter`: 같은 소설 내 인접 wr_id (정확한 회차 순서 아닐 수 있음)
+- `chapter`: 수집 시 회차번호를 추출해 저장. 추출 실패 시 `null`이 될 수 있으나, **wr_id로 폴백하지 않는다** (lib/storage.py).
+- `prevChapter`/`nextChapter`: 같은 소설 내 **chapter 번호 순서** 기준 인접 회차의 wr_id (wr_id 정렬 아님).
+  - 화산귀환처럼 wr_id 순서 ≠ 회차 순서인 작품에서도 올바르게 동작.
 
 ### 6. GET /api/novels/{novel_id}/epub
 
@@ -212,8 +213,8 @@
 
 ## CORS
 
-- 프로덕션 (Vercel): 자동 처리 (같은 도메인)
-- 개발 (`localhost:3000` → `localhost:8000`): `CORS_ORIGINS` 환경변수 설정 필요
+- 프로덕션 (Vercel): 자동 처리 (같은 도메인, `/api/*` → devforge 프록시)
+- 개발 (`localhost:3000` → `127.0.0.1:8089`): `CORS_ORIGINS` 환경변수 설정 필요
 
 ## 다음 문서
 - [05-DEPLOYMENT.md](05-DEPLOYMENT.md) - 배포

@@ -64,7 +64,7 @@ python3 scripts/pipeline.py revalidate "오늘만 사는 기사"
 # services/bookto31.py 사용
 html = fetch_chapter(wr_id)            # FlareSolverr → Cloudflare 우회
 body = parse_chapter_body(html)        # GNUBOARD5 본문 추출
-chapter_num = extract_from_title(html) # "제목 - 839화" 패턴
+chapter_num = _extract_chapter_from_html(html) # "<title>제목 - 839화</title>" 패턴
 ```
 
 **newtoki 수집기**:
@@ -161,14 +161,19 @@ def get_chapter_list(novel_id, page=1, limit=20):
 
 3. 사용자가 회차 클릭
    └─→ GET /novel/{id}/chapter/{wr_id} (ISR)
-   └─→ devforge 폴백: /api/chapters/{wr_id} (3ms)
+   └─→ devforge 직접: /api/chapters/{wr_id} (3ms)
 ```
 
 ## 6. 데이터 무결성
 
-- **챕터 번호**: HTML `<title>`에서 `"제목 - N화"` 패턴 추출
-- **외전 챕터**: 본문이 `"외전 N화"`로 시작 → wr_id 기준 추정값 사용
-- **빈 챕터**: 100자 미만 본문은 수집 실패로 간주, 3회 재시도
+- **챕터 번호 추출 우선순위** (`lib/storage.py::_extract_chapter_num`):
+  1. 큐/collect 단계에서 전달된 chapter 번호
+  2. HTML `<title>`에서 `"제목 - N화"` 패턴 (`_extract_chapter_from_html`)
+  3. 본문 첫 줄 `^(\d+)(?:화|편|장)` — 실패 시 본문 어디서든 같은 패턴
+- **추출 실패 시**: **wr_id로 폴백하지 않고 `chapter: null`**로 저장 (2026-09-09부터).
+  - 이전 버그: `chapter = wr_id` 폴백 → chapter/title이 "5784625화"로 오염 → "1화→2화" 탐색 파괴
+- **정렬**: 이전/다음 화, 회차 목록은 **chapter 번호 기준** 정렬 (wr_id 아님). wr_id는 파일명/식별자로만 사용.
+- **빈 챕터**: 100자 미만 본문은 수집 실패로 간주, 3회 재시도 → 실패 시 DLQ(failed.json) 기록
 
 ## 7. 큐 데이터 구조
 

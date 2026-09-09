@@ -15,16 +15,18 @@
 ## 챕터 자동 수집 (간단 사용법)
 
 ```bash
-# 큐에 챕터 추가
-python3 scripts/ebook_watcher/ebook_queue.py add 25575 "오늘만 사는 기사"
+# 작품 메인 wr_id로 discover → 큐 등록 → collect
+python3 scripts/pipeline.py all 25575 "오늘만 사는 기사"
 
-# 큐 확인
-python3 scripts/ebook_watcher/ebook_queue.py list
+# 상시 루프 (연재작 자동 수집 + 월 1회 discover)
+python3 scripts/pipeline.py loop --source bookto31
 
-# 15분마다 ebook-watcher.timer가 자동 실행
-# 북토끼 5분 챕터 간 안전 지연 + 재시도 3회
-# 실패 시 attempts 카운트, 5회까지 큐 유지
+# 또는 Admin 페이지 (https://miniebook.vercel.app/admin)에서 URL 입력
 ```
+
+- 파이프라인 5단계: discover → collect → enrich → index → revalidate
+- 북토끼 5~10분 챕터 간 안전 지연 + 3회 재시도, 실패 시 DLQ(failed.json) 기록
+- devforge-watchdog + systemd가 60초/10분 이중 감시
 
 ## 구조
 
@@ -32,74 +34,69 @@ python3 scripts/ebook_watcher/ebook_queue.py list
 /opt/workspace/ebooklib/
 ├── apps/
 │   ├── frontend/          # Next.js 16 + React 19 (Vercel 배포)
-│   │   ├── src/
-│   │   │   ├── app/       # App Router 페이지
-│   │   │   │   ├── page.tsx           # 라이브러리 메인
-│   │   │   │   └── novel/[id]/        # 소설 상세 + 회차
-│   │   │   └── lib/api.ts             # API 클라이언트 (상대 경로)
-│   │   ├── package.json
-│   │   └── .env.local
+│   │   ├── app/           # App Router 페이지
+│   │   │   ├── page.tsx                   # 라이브러리 메인 (ISR)
+│   │   │   ├── admin/page.tsx             # 파이프라인 관리
+│   │   │   ├── novel/[id]/                # 소설 상세 + 회차
+│   │   │   │   └── chapter/[wr_id]/       # 회차 읽기
+│   │   │   └── api/[...slug]/route.ts     # catch-all 프록시 → devforge
+│   │   ├── lib/api.ts             # 타입 + fetch 래퍼
+│   │   ├── next.config.ts
+│   │   └── package.json
 │   │
-│   └── backend/           # FastAPI (Vercel Python Functions)
+│   └── backend/           # FastAPI (devforge, OCI)
 │       ├── main.py        # 앱 엔트리포인트 + 라우터 등록
 │       ├── routers/
 │       │   ├── metadata.py   # /api/metadata/lookup, /api/metadata/search
 │       │   ├── novels.py     # /api/novels, /api/novels/{id}
-│       │   └── chapters.py   # /api/novels/{id}/chapters, /api/chapters/{wr_id}
+│       │   ├── chapters.py   # /api/novels/{id}/chapters, /api/chapters/{wr_id}
+│       │   └── pipeline.py   # 파이프라인 시작/상태 (Admin용)
 │       ├── services/
-│       │   ├── metadata.py   # ISBNLib + Brave/DuckDuckGo 메타데이터 조회
+│       │   ├── data.py       # JSON 파일 읽기 (인덱스 캐시)
+│       │   ├── epub.py       # EPUB 생성 (한글 4폰트)
 │       │   ├── bookto31.py   # 북토끼 크롤러 (FlareSolverrSession)
-│       │   ├── toki31.py     # 뉴토끼 크롤러 (curl_cffi)
-│       │   └── data.py       # JSON 파일 읽기 서비스
+│       │   ├── metadata.py   # 메타데이터 검색
+│       │   └── metadata_namu.py # namu.wiki 메타데이터
 │       ├── lib/              # 공통 레이어
-│       │   ├── user_agent.py          # Chrome 헤더 빌더
 │       │   ├── flaresolverr_client.py # FlareSolverr 세션 관리
-│       │   ├── curl_session.py        # curl_cffi 세션 팩토리
 │       │   ├── storage.py             # 챕터 저장/메타 관리
+│       │   ├── toki31_playwright.py   # 뉴토끼 Playwright 추출기
 │       │   └── rate_limiter.py        # SQLite rate limiter
-│       ├── requirements.txt
-│       └── .env
+│       └── requirements.txt
 │
 ├── scripts/
-│   ├── ebook_watcher/     # 자동 수집 워치독
-│   │   ├── watchdog.py    # 15분마다 큐 체크 + 워커 트리거
-│   │   ├── ebook_worker.py # 큐 작업 처리 (lib.storage 사용)
-│   │   └── ebook_queue.py # CLI 큐 관리
-│   ├── discover_chapters.py    # 회차 wr_id 자동 발견
-│   ├── dual_metadata_ssot.py   # 문피아/조아라 듀얼 메타데이터
-│   ├── bookto31_healthcheck.py # 북토끼 상태 체크
-│   └── json_to_epub.py    # JSON → EPUB 변환기
+│   ├── pipeline.py                  # 파이프라인 (discover/collect/enrich/index/revalidate/loop)
+│   ├── json_to_epub.py              # JSON → EPUB 변환기
+│   └── fonts/                       # EPUB 한글 폰트
 │
-├── vercel.json            # Monorepo 빌드/라우팅 설정
-├── .gitignore
 └── README.md
 ```
 
 ## 아키텍처
 
-### Monorepo 장점
-- **단일 배포**: `vercel deploy` 한 번으로 프론트+백엔드 동시 배포
-- **CORS 불필요**: 같은 도메인(`/api/*` 라우팅)
-- **공통 환경변수**: 루트 `vercel.json`에서 관리
-- **원자적 배포**: 프론트/백엔드 버전 동기화 보장
+### 배포 구조
+- **프론트엔드**: Vercel (Next.js ISR)
+- **백엔드**: devforge (Oracle Cloud) — FastAPI @ 8089
+- **Vercel `/api/*`** → catch-all 프록시 → devforge 백엔드
+- 데이터는 devforge 로컬 `/opt/ai_data/flaresolverr/novels/` JSON 파일 단일 소스
 
-### 라우팅 (vercel.json)
+### 라우팅
 | 경로 | 대상 |
 |------|------|
-| `/api/*` | `apps/backend/main.py` (FastAPI) |
-| `/*` | `apps/frontend/.next` (Next.js) |
+| `/` , `/novel/*` | Next.js (ISR, devforge 직접 fetch) |
+| `/api/*` | `app/api/[...slug]/route.ts` → devforge 백엔드 프록시 |
 
 ## API 엔드포인트
 
 | 메서드 | 경로 | 설명 |
 |--------|------|------|
-| GET | `/api/health` | 헬스체크 |
 | GET | `/api/novels` | 소설 목록 |
 | GET | `/api/novels/{novel_id}` | 소설 상세 |
 | GET | `/api/novels/{novel_id}/chapters` | 회차 목록 (페이지네이션) |
-| GET | `/api/chapters/{wr_id}` | 회차 상세 (본문 포함) |
+| GET | `/api/chapters/{wr_id}` | 회차 상세 (본문 포함, prev/next) |
 | GET | `/api/metadata/lookup` | 단일 메타데이터 조회 |
 | GET | `/api/metadata/search` | 다중 메타데이터 검색 |
+| GET | `/api/novels/{novel_id}/epub` | EPUB 다운로드 |
 
 ### 메타데이터 서비스 파라미터
 - `service`: `goob` (Google Books), `openl` (OpenLibrary), `brave` (Brave/DuckDuckGo)
@@ -112,7 +109,7 @@ python3 scripts/ebook_watcher/ebook_queue.py list
 ```bash
 # 터미널 1: 백엔드
 cd apps/backend
-uvicorn main:app --reload --port 8000
+venv/bin/python -m uvicorn main:app --reload --port 8089
 
 # 터미널 2: 프론트엔드
 cd apps/frontend
@@ -121,14 +118,17 @@ npm run dev  # http://localhost:3000
 
 **로컬에서만** `apps/frontend/.env.local`에 주석 해제:
 ```env
-NEXT_PUBLIC_API_URL=http://localhost:8000
+NEXT_PUBLIC_API_URL=http://127.0.0.1:8089
 ```
 
-### 프로덕션 (Vercel Monorepo)
+### 프로덕션 (Vercel + devforge)
 ```bash
-# 루트에서 배포
+# 프론트엔드 배포 (Vercel, Root Directory=apps/frontend)
 cd /opt/workspace/ebooklib
-vercel --prod
+vercel deploy --prod --project miniebook
+
+# 백엔드는 devforge에서 실행 중 (port 8089) — 재시작 필요 시:
+#   cd apps/backend && setsid nohup venv/bin/python -m uvicorn main:app --host 0.0.0.0 --port 8089 &
 ```
 
 ### EPUB 변환 (독립 실행)
@@ -165,18 +165,19 @@ CORS_ORIGINS=["https://miniebook.vercel.app"]  # Vercel에서 자동 처리됨
 
 ### 프론트엔드 (`apps/frontend/.env.local`)
 ```env
-# 프로덕션: 비워둠 (상대 경로 사용)
-# 로컬 개발 시에만:
-# NEXT_PUBLIC_API_URL=http://localhost:8000
+# 로컬 개발 시:
+# NEXT_PUBLIC_API_URL=http://127.0.0.1:8089
+# 프로덕션: Vercel 대시보드에서 NEXT_PUBLIC_API_URL 설정
 ```
 
 ## 배포 체크리스트
 
-- [ ] Vercel 프로젝트 생성 시 **Root Directory: `/`** (루트)
+- [ ] Vercel 프로젝트 생성 시 **Root Directory: `apps/frontend`**
 - [ ] Framework: `Next.js` (자동 감지)
-- [ ] Build Command: `npm run build --prefix apps/frontend && pip install -r apps/backend/requirements.txt`
-- [ ] Output Directory: `apps/frontend/.next`
-- [ ] Functions: `apps/backend/main.py` (maxDuration: 30s)
+- [ ] Build Command: `npm run build`
+- [ ] Output Directory: `.next`
+- [ ] 환경변수: `NEXT_PUBLIC_API_URL=https://devforge.152-69-229-246.nip.io`, `VERCEL_REVALIDATE_TOKEN`
+- [ ] 백엔드는 devforge에서 uvicorn port 8089 실행 중 (Caddy nip.io 노출)
 
 ## 의존성
 

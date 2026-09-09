@@ -5,105 +5,102 @@
 ## 환경 구성
 
 ### 호스팅
-- **프론트엔드 + 백엔드 API**: Vercel (Monorepo 단일 배포)
-- **FlareSolverr**: 로컬 서버 (Podman Quadlet)
-- **데이터 스토리지**: 로컬 파일시스템 (`/opt/ai_data/`)
+- **프론트엔드**: Vercel (Next.js, Root Directory = `apps/frontend`)
+- **백엔드 API**: devforge (Oracle Cloud) — FastAPI @ `127.0.0.1:8089`, Caddy(nip.io)로 공개
+- **FlareSolverr**: devforge 로컬 서버 (Podman Quadlet)
+- **데이터 스토리지**: devforge 로컬 파일시스템 (`/opt/ai_data/`)
+
+> Vercel의 `/api/*`는 `app/api/[...slug]/route.ts` catch-all이 **devforge 백엔드로 프록시**한다.
+> (Neon DB 미사용 — 2026-09-09부터 단일 데이터 소스로 통일)
 
 ### 시스템 요구사항
-- **로컬 서버** (FlareSolverr):
+- **devforge 서버** (FlareSolverr + FastAPI):
  - ARM64 또는 x86_64 Linux
  - Podman 4.x + systemd
  - 2GB RAM, 2 CPU core (FlareSolverr용)
  - ARM64 이미지: `ghcr.io/flaresolverr/flaresolverr:latest`
 - **Vercel**:
  - Hobby ($0) 또는 Pro 계정
- - Python Functions 지원 (Hobby: 10s timeout, Pro: 60s)
 
 ## Vercel 배포
 
 ### 1. 프로젝트 설정
 
-**중요**: Vercel 프로젝트 생성 시 **Root Directory = `/` (루트)**.
+**중요**: Vercel 프로젝트 생성 시 **Root Directory = `apps/frontend`**.
 
 ```
 Project Settings:
-  - Root Directory: /
+  - Root Directory: apps/frontend
   - Framework Preset: Next.js
-  - Build Command: npm run build --prefix apps/frontend && pip install -r apps/backend/requirements.txt
-  - Output Directory: apps/frontend/.next
-  - Functions:
-    - Entry: apps/backend/main.py
-    - maxDuration: 30s (Hobby) 또는 60s (Pro)
+  - Build Command: npm run build
+  - Output Directory: .next
+```
+
+`apps/frontend/vercel.json`:
+```json
+{
+  "framework": "nextjs",
+  "buildCommand": "npm run build",
+  "outputDirectory": ".next"
+}
 ```
 
 ### 2. 환경변수 설정
 
-Vercel Dashboard → Settings → Environment Variables:
+Vercel Dashboard → Settings → Environment Variables (production):
 
 ```
-CORS_ORIGINS = ["https://miniebook.vercel.app"]
-ENV = production
-DEBUG = false
+NEXT_PUBLIC_API_URL = https://devforge.152-69-229-246.nip.io   # devforge 백엔드
+VERCEL_REVALIDATE_TOKEN = <revalidate 인증 토큰>
 ```
 
-선택적:
-```
-BRAVE_API_KEY = your_brave_api_key  # 메타데이터 Brave 검색
-```
+> `NEXT_PUBLIC_API_URL`은 빌드 시 베이크되므로 변경 시 재배포 필요.
 
-### 3. vercel.json (루트)
-
-```json
-{
-  "version": 2,
-  "builds": [
-    {
-      "src": "apps/backend/main.py",
-      "use": "@vercel/python",
-      "config": {
-        "maxDuration": 30,
-        "memory": 1024
-      }
-    }
-  ],
-  "routes": [
-    { "src": "/api/(.*)", "dest": "apps/backend/main.py" },
-    { "src": "/(.*)", "dest": "apps/frontend/$1" }
-  ]
-}
-```
-
-### 4. requirements.txt (백엔드)
-
-```txt
-fastapi>=0.104.0
-uvicorn[standard]>=0.24.0
-pydantic>=2.0.0
-python-dotenv>=1.0.0
-isbnlib>=3.10,<3.12
-tenacity>=9.0.0
-requests>=2.32.0
-ebooklib>=0.20
-lxml>=6.0.0
-```
-
-### 5. 배포 명령
+### 3. 배포 명령
 
 ```bash
 # Vercel CLI 설치
 npm install -g vercel
 
-# 최초 배포 (프로젝트 연결)
+# 최초 배포 (프로젝트 연결, Root Directory=apps/frontend 설정)
 cd /opt/workspace/ebooklib
-vercel --prod
-
-# 환경변수 설정
-vercel env add CORS_ORIGINS production
+vercel --prod --project miniebook
 
 # 이후 배포
-git push origin main  # 자동 배포 (GitHub 연동 시)
-# 또는 수동
-vercel --prod
+vercel deploy --prod --project miniebook
+```
+
+## 백엔드(devforge) 배포
+
+FastAPI 백엔드는 Vercel이 아니라 **devforge (Oracle Cloud)**에서 실행된다.
+
+### 1. 서비스 실행
+
+```bash
+cd /opt/workspace/ebooklib/apps/backend
+setsid nohup venv/bin/python -m uvicorn main:app --host 0.0.0.0 --port 8089 \
+  >> /var/tmp/ebook_backend.log 2>&1 < /dev/null &
+```
+
+### 2. 외부 노출 (Caddy)
+
+- Caddy가 `devforge.152-69-229-246.nip.io` → `127.0.0.1:8089` 리버스 프록시
+- Vercel의 `NEXT_PUBLIC_API_URL`이 이 도메인을 가리킴
+
+### 3. 재시작 (코드 변경 반영)
+
+```bash
+# 프로세스 확인
+ps aux | grep "port 8089"
+
+# 재시작
+kill <PID>
+cd /opt/workspace/ebooklib/apps/backend
+setsid nohup venv/bin/python -m uvicorn main:app --host 0.0.0.0 --port 8089 \
+  >> /var/tmp/ebook_backend.log 2>&1 < /dev/null &
+
+# 검증
+curl http://127.0.0.1:8089/api/novels | head -c 200
 ```
 
 ## 로컬 FlareSolverr 배포
@@ -226,20 +223,20 @@ ss -tlnp | grep ":80\|:443"
 
 ## 환경별 설정
 
-### .env (백엔드 로컬)
+### .env (백엔드, devforge)
 ```env
 ENV=development
 DEBUG=true
-CORS_ORIGINS=["http://localhost:3000"]
+CORS_ORIGINS=["https://miniebook.vercel.app"]
 ```
 
-### .env.local (프론트엔드 로컬)
+### .env.local (프론트엔드 로컬 개발)
 ```env
-NEXT_PUBLIC_API_URL=http://localhost:8000
+NEXT_PUBLIC_API_URL=http://127.0.0.1:8089   # devforge 백엔드 (또는 로컬 uvicorn)
 ```
 
 ### .env (프론트엔드 프로덕션)
-- 비워둠 (상대 경로 사용)
+- Vercel 대시보드에서 `NEXT_PUBLIC_API_URL` 설정 (빌드 시 베이크)
 
 ## 모니터링
 
@@ -259,60 +256,43 @@ curl https://miniebook.vercel.app/api/chapters/21431 | head -c 200
 - Vercel: Dashboard → Deployments → Logs
 - FlareSolverr: `journalctl --user -u container-flaresolverr.service`
 
-## 자동화 시스템 배포 (ebook-watcher)
+## 자동화 시스템 배포 (pipeline loop)
 
-`scripts/ebook_watcher/` 3개 파일이 자동 수집 워치를 담당합니다.
+파이프라인 상시 루프를 systemd로 실행한다. 상세는 [07-AUTOMATION.md](07-AUTOMATION.md) 참고.
 
-### systemd 서비스 등록
+### ebook-watcher.service (systemd)
 
-**ebook-watcher.service** (`~/.config/systemd/user/`):
+`~/.config/systemd/user/ebook-watcher.service`:
 ```ini
 [Unit]
-Description=Ebook Watcher — ebook_worker 트리거 (15분마다)
+Description=Ebook Pipeline — 파이프라인 루프 (devforge-watchdog 감시)
 After=network-online.target svc-pod.service container-flaresolverr.service
 Wants=network-online.target
 
 [Service]
-Type=oneshot
-Environment=PYTHONPATH=/opt/workspace/ebooklib/scripts/ebook_watcher
-WorkingDirectory=/opt/workspace/ebooklib/scripts/ebook_watcher
-ExecStart=/opt/workspace/ebooklib/apps/backend/venv/bin/python3 /opt/workspace/ebooklib/scripts/ebook_watcher/watchdog.py
-Restart=no
+Type=notify                                                        # sd_notify (READY=1 + WATCHDOG=1)
+EnvironmentFile=/home/opc/.config/devforge/secrets.env
+WorkingDirectory=/opt/workspace/ebooklib
+ExecStart=/opt/workspace/ebooklib/apps/backend/venv/bin/python3 /opt/workspace/ebooklib/scripts/pipeline.py loop --source bookto31
+WatchdogSec=600                                                    # 10분 내 신호 없으면 hang
+Restart=on-watchdog                                                # hang/실패 시 재시작
+RestartSec=30
 StandardOutput=journal
 StandardError=journal
-
-[Install]
-WantedBy=default.target
-```
-
-**ebook-watcher.timer**:
-```ini
-[Unit]
-Description=Ebook Watcher Timer — 15분마다 워커 체크
-After=network-online.target
-
-[Timer]
-OnCalendar=*:0/15
-Persistent=true
-AccuracySec=1min
-
-[Install]
-WantedBy=timers.target
 ```
 
 ### 등록 명령
 ```bash
 systemctl --user daemon-reload
-systemctl --user enable --now ebook-watcher.timer
+systemctl --user enable --now ebook-watcher.service
 
 # 상태 확인
-systemctl --user status ebook-watcher.timer
-systemctl --user list-timers ebook-watcher.timer
+systemctl --user status ebook-watcher.service
 ```
 
-### devforge 프로젝트에 ebook-watcher 등록
+### devforge-watchdog 연동
 
-ebook-watcher를 자동으로 모니터링/복구하려면 `/opt/projects/server/scripts/lib/watchdog/config.py`에 추가:
+`/opt/projects/server/scripts/lib/watchdog/config.py`의 `SERVICE_TARGETS`에 추가:
 
 ```python
 SERVICE_TARGETS = [
@@ -321,14 +301,14 @@ SERVICE_TARGETS = [
 ]
 ```
 
-이렇게 하면 devforge-watchdog이 60초마다 ebook-watcher 상태를 확인하고 죽으면 자동 재시작합니다.
+devforge-watchdog이 60초마다 `check_ebook_pipeline()`(프로세스 + 로그 활동)으로 감시하고 죽으면 자동 재시작합니다.
 
 ### 큐 디렉토리 생성
 ```bash
 mkdir -p /opt/ai_data/flaresolverr/ebook_watcher
 ```
 
-(첫 ebook-watcher.service 실행 시 자동 생성됨)
+(`pipeline.py loop` 최초 실행 시 자동 생성됨)
 
 ## 트러블슈팅
 

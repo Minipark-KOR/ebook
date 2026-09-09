@@ -97,10 +97,6 @@ def get_novel_list() -> list[dict]:
                 # 디렉토리 이름으로 메타데이터 생성
                 chapters = list(novel_dir.glob("*.json"))
                 if chapters:
-                    # 첫 번째 JSON 파일에서 메타데이터 추출
-                    with open(chapters[0], "r", encoding="utf-8") as f:
-                        first_chapter = json.load(f)
-                    
                     novels.append(
                         {
                             "id": novel_dir.name,

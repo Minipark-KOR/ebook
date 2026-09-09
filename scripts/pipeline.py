@@ -167,6 +167,27 @@ def _parse_source() -> str:
 
 # === 1단계: DISCOVER — wr_id 발견 → 큐에 추가 ===
 
+def _update_novel_status_from_discover(meta: dict, added: int, novel_title: str) -> None:
+    """discover 결과로 연재 상태를 갱신 (소스 기반 판단 — namu 의존 없음).
+
+    - 신규 회차 발견(added>0) → 연재중 (활동 증거), no_new_streak 초기화
+    - 신규 0회차 → no_new_streak +1, 2연속이면 완결로 전환
+      → 완결 소설은 이후 월간 체크 목록에서 자동 제외
+    """
+    this_month = datetime.now().strftime('%Y-%m')
+    meta['last_discover'] = this_month
+    if added > 0:
+        meta['status'] = '연재중'
+        meta['no_new_streak'] = 0
+        meta['last_new_episode'] = this_month
+    else:
+        streak = int(meta.get('no_new_streak', 0)) + 1
+        meta['no_new_streak'] = streak
+        if streak >= 2 and meta.get('status') != '완결':
+            meta['status'] = '완결'
+            log.info(f"  ✓ {novel_title}: 2개월 연속 신규 회차 0 → 완결로 판정")
+
+
 def run_discover(wr_id: int, novel_title: str = "", max_pages: int = 50, source: str = "bookto31", dry_run: bool = False) -> int:
     """북토끼 작품 메인에서 모든 회차 wr_id 발견 → 큐에 추가.
 
@@ -296,6 +317,8 @@ def run_discover(wr_id: int, novel_title: str = "", max_pages: int = 50, source:
             meta['main_wr_id'] = wr_id
             meta['source'] = source
             meta['title'] = novel_title
+            # 소스 기반 연재 상태 갱신 (완결 판정 포함)
+            _update_novel_status_from_discover(meta, added, novel_title)
             with open(meta_file, 'w', encoding='utf-8') as f:
                 json.dump(meta, f, ensure_ascii=False, indent=2)
         except Exception as e:
@@ -449,8 +472,13 @@ def _run_collect_locked(limit: int = 0, source_filter: str = "") -> dict:
 
 # === 3단계: ENRICH — namu.wiki 메타데이터 보강 ===
 
-def run_enrich(novel_id: Optional[str] = None) -> dict:
-    """meta.json에 namu.wiki 메타데이터 보강 (1회만, namu_attempted 플래그로 관리)."""
+def run_enrich(novel_id: Optional[str] = None, force: bool = False) -> dict:
+    """meta.json에 namu.wiki 메타데이터 보강.
+
+    force=True면 namu_attempted/작가 유무와 무관하게 항상 갱신
+    (URL 수신 시, 월간 discover에서 신규 회차 발견 시 호출).
+    참고: status는 namu가 아닌 discover(소스 기반)가 결정하므로 여기서 덮어쓰지 않는다.
+    """
     from services.metadata_namu import get_metadata
 
     DATA_DIR = Path('/opt/ai_data/flaresolverr/novels')
@@ -467,11 +495,11 @@ def run_enrich(novel_id: Optional[str] = None) -> dict:
         with open(meta_file) as f:
             meta = json.load(f)
 
-        if meta.get('namu_attempted') or meta.get('author', '') != '미상':
+        if not force and (meta.get('namu_attempted') or meta.get('author', '') != '미상'):
             results['skipped'] += 1
             continue
 
-        # namu_attempted 플래그 설정 (1회만)
+        # namu_attempted 플래그 설정
         meta['namu_attempted'] = True
         with open(meta_file, 'w') as f:
             json.dump(meta, f, ensure_ascii=False, indent=2)
@@ -724,10 +752,10 @@ def run_all(novel_main_wr_id: int, novel_title: str, source: str = "bookto31") -
     first = run_collect(limit=1, source_filter=source)
     results['collect_first'] = first
 
-    # 3. enrich
+    # 3. enrich — URL 수신 시이므로 항상 갱신 (force)
     novel_id = novel_title.replace(' ', '_').replace('/', '_')
     log.info("\n[3/5] ENRICH — 메타데이터 보강")
-    enriched = run_enrich(novel_id)
+    enriched = run_enrich(novel_id, force=True)
     results['enrich'] = enriched
 
     # 4. index
@@ -771,7 +799,7 @@ def _auto_discover(source: str = "bookto31") -> None:
                 meta = json.load(f)
         except Exception:
             continue
-        # 완결작은 새 회차 없음
+        # 완결작은 새 회차 없음 (월간 체크 목록에서 제외)
         if meta.get('status') == '완결':
             continue
         main_wr_id = meta.get('main_wr_id')
@@ -780,7 +808,14 @@ def _auto_discover(source: str = "bookto31") -> None:
             continue
         log.info(f"  auto-discover: {title} (main_wr_id={main_wr_id})")
         try:
-            run_discover(int(main_wr_id), title, max_pages=200, source=source)
+            added = run_discover(int(main_wr_id), title, max_pages=200, source=source)
+            # 신규 회차 발견(queue 추가) 시 그 소설의 메타데이터도 갱신
+            if added > 0:
+                log.info(f"  {title}: 신규 {added}화 발견 → 메타데이터 갱신")
+                try:
+                    run_enrich(novel_dir.name, force=True)
+                except Exception as e:
+                    log.warning(f"  {title} 메타 갱신 실패: {e}")
         except Exception as e:
             log.warning(f"  {title} discover 실패: {e}")
 

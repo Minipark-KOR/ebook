@@ -116,9 +116,9 @@ export default function NovelClient({
                 {g}
               </span>
             ))}
-            {novel.status && novel.status !== "unknown" && (
+            {novel.status && (
               <span className="px-2 py-1 bg-green-100 dark:bg-green-900 text-green-800 dark:text-green-200 text-xs rounded">
-                {novel.status}
+                {novel.status === "연재중" ? "연재 중" : novel.status}
               </span>
             )}
           </div>

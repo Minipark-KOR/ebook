@@ -173,8 +173,8 @@ def update_meta_from_namu(novel_title: str, namu_meta: dict) -> bool:
             meta["description"] = namu_meta["description"]
         if namu_meta.get("genre"):
             meta["genre"] = namu_meta["genre"]
-        if namu_meta.get("status") and namu_meta["status"] != "unknown":
-            meta["status"] = namu_meta["status"]
+        # status는 namu가 아닌 discover(소스 기반)가 결정하므로 덮어쓰지 않는다.
+        # namu의 연재상태는 수동 편집이라 stale/부정확 (완결인데 수집 중 등).
         if namu_meta.get("publisher"):
             meta["publisher"] = namu_meta["publisher"]
         if namu_meta.get("url"):

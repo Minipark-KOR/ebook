@@ -4,6 +4,32 @@
 
 ## 2026-09-09 (최신)
 
+### 연재 상태/메타데이터 정확도 개선 (소스 기반)
+- **상태 진실 원천 변경**: namu.wiki → **discover(소스 사이트)**
+  - `_update_novel_status_from_discover()`: 신규 회차 발견(added>0) → 연재중
+  - 2개월 연속 신규 0 → **완결 자동 판정** → 이후 월간 체크 목록에서 완전 제외
+  - `lib/storage.py::update_meta_from_namu()`: status 덮어쓰기 제거 (namu 연재상태는 stale/부정확)
+- **메타데이터 갱신 트리거** (`run_enrich(force=True)` 추가):
+  - URL 수신 시(`run_all`) → 항상 갱신
+  - 월 1일 `_auto_discover` → **신규 회차 발견(queue 추가)된 소설만** namu 메타 갱신
+- **현재 오류 데이터 수정**: 게임_속_바바리안(완결→연재중), 화산귀환(완결→연재중)
+  - 확인: 게임 소설은 bookto31에 1000+화 존재(셀렉트는 최근 30화 윈도우만 표시) → "완결 30화"는 오류
+  - 하남자(완결)는 유지 — 유일하게 정확한 완결
+- **discover 결과**: `meta.last_discover`/`no_new_streak`/`last_new_episode` 기록
+
+### Admin 페이지 단순화 + 연재 상태 구분
+- **Admin 페이지 재구성**: 진행 중 / 완료 2개 섹션으로 정리
+  - 진행 중인 작업: 소설명 + 진행바 + `N/M (P%)` + `예상 완료까지 X시간 Y분(약 Z일)` — 루프 상태/wr_id/시도/큐 세부 제거
+  - 완료된 작업: `제목 · N화 · [완결]/[연재 중]`
+- **진행 중/완료 판정**: `collection_done = queue 없음 && saved == total`
+  - 완결이어도 queue가 남아 있으면 "진행 중" (게임: 완결인데 210개 대기)
+- **연재 상태 구분 (완결/연재 중)**: `services/data.py::resolve_status()`
+  - `meta.status`가 (완결/연재중/연재/단편) → 정규화, 누락/unknown이면 **수집 이력 fallback 추론** (14일↑ = 완결)
+  - 라이브러리 표지 배지·소설 상세·Admin 완료 목록에 일관 적용, "연재중"→"연재 중" 표시
+- **ETA**: `routers/pipeline.py::_estimate_seconds_per_chapter()` — 최근 수집 간격 평균 × 남은 queue 수 → `eta_seconds`
+  - bookto31(300~600s)/toki31(5~60s) 실제 속도 반영, 백엔드 계산
+- **`routers/pipeline.py`**: 미사용 import(asyncio/sys)·f-string 정리 (ruff clean)
+
 ### EPUB 회차 순서 버그 수정
 - **`services/epub.py::build_epub`**: 챕터 정렬이 **wr_id**(파일명) 기준이던 것을 **chapter 번호** 기준으로 수정
   - 화산귀환(1922화가 wr_id 최소) 등에서 EPUB 챕터 순서가 뒤섞이는 문제 해결

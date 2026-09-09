@@ -83,6 +83,51 @@ def load_chapters_index(novel_dir: Path) -> Optional[list[dict]]:
     return rebuild_chapters_index(novel_dir)
 
 
+def resolve_status(meta: dict, novel_dir: Path) -> str:
+    """연재 상태 해석 — 완결/연재중 구분의 단일 진실 원천.
+
+    우선순위:
+    1. meta.status가 (완결/연재중/연재/단편) → 정규화해 사용
+    2. 누락/unknown → 마지막 챕터 수집일 기준 추론
+       (14일 이상 지나면 완결, 그 외 연재중)
+
+    표시용 정규값: "완결" | "연재중" | "단편"
+    """
+    s = (meta.get("status") or "").strip()
+    if s == "완결":
+        return "완결"
+    if s == "단편":
+        return "단편"
+    if s in ("연재중", "연재"):
+        return "연재중"
+    # fallback: 수집 이력으로 추론 (상태가 unknown/없는 경우만)
+    latest = ""
+    for f in novel_dir.glob("*.json"):
+        if f.name in ("meta.json", CHAPTERS_INDEX_FILE) or not f.stem.isdigit():
+            continue
+        try:
+            with open(f, encoding="utf-8") as fh:
+                d = json.load(fh)
+            t = (d.get("collected_at") or "").strip()
+            if t and t > latest:
+                latest = t
+        except Exception:
+            continue
+    if latest:
+        from datetime import datetime, timezone
+        try:
+            if latest.endswith("Z"):
+                latest = latest[:-1] + "+00:00"
+            dt = datetime.fromisoformat(latest)
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            if (datetime.now(timezone.utc) - dt).total_seconds() > 14 * 86400:
+                return "완결"
+        except Exception:
+            pass
+    return "연재중"
+
+
 def get_novel_list() -> list[dict]:
     """소설 목록 조회"""
     novels = []
@@ -92,6 +137,7 @@ def get_novel_list() -> list[dict]:
             if meta_file.exists():
                 with open(meta_file, "r", encoding="utf-8") as f:
                     meta = json.load(f)
+                    meta["status"] = resolve_status(meta, novel_dir)
                     novels.append(meta)
             else:
                 # 디렉토리 이름으로 메타데이터 생성
@@ -104,6 +150,7 @@ def get_novel_list() -> list[dict]:
                             "author": "미상",
                             "totalChapters": len(chapters),
                             "coverUrl": None,
+                            "status": resolve_status({}, novel_dir),
                         }
                     )
     return novels
@@ -125,6 +172,7 @@ def get_novel_detail(novel_id: str) -> Optional[dict]:
                     if f.name not in ("meta.json", CHAPTERS_INDEX_FILE)]
         chapter_count = len(chapters)
         meta["totalChapters"] = chapter_count
+        meta["status"] = resolve_status(meta, novel_dir)
         return meta
 
     chapters = [f for f in novel_dir.glob("*.json")
@@ -138,6 +186,7 @@ def get_novel_detail(novel_id: str) -> Optional[dict]:
         "author": "미상",
         "totalChapters": len(chapters),
         "coverUrl": None,
+        "status": resolve_status({}, novel_dir),
     }
 
 

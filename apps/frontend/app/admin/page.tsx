@@ -77,8 +77,8 @@ export default function AdminPage() {
       total: number;
       status?: string;
       queued: boolean;
-      serializing: boolean;
-      completed: boolean;
+      collection_done: boolean;
+      eta_seconds?: number | null;
     }>;
   } | null>(null);
   // Check sessionStorage on mount
@@ -271,212 +271,93 @@ export default function AdminPage() {
           </div>
         )}
 
-        {/* Pipeline Progress */}
-        {pipelineStatus && (pipelineStatus.current_job || pipelineStatus.loop_running || pipelineStatus.queue.total > 0) && (
-          (() => {
-            const progress = pipelineStatus.progress;
-            const cur = progress?.current;
-            const total = progress?.total || 0;
-            const index = progress?.index || 0;
-            const processed = progress?.processed ?? 0;
-            const remaining = progress?.remaining ?? pipelineStatus.queue.total;
-            const nextItem = pipelineStatus.queue.next_item;
-            // 진행률: collect 단계에서는 current index/total, 아니면 큐 기반 추정
-            const pct = total > 0
-              ? Math.min(100, Math.round((index / total) * 100))
-              : pipelineStatus.queue.total > 0
-                ? 100
-                : 0;
-            const collectTarget = cur || nextItem;
+        {/* 진행 중인 작업 / 완료된 작업 */}
+        {pipelineStatus?.novels && pipelineStatus.novels.length > 0 && (() => {
+          const nextTitle = pipelineStatus.queue?.next_item?.novel_title;
+          const inProgress = pipelineStatus.novels
+            .filter((n) => !n.collection_done)
+            .sort((a, b) => (a.title === nextTitle ? -1 : 0) - (b.title === nextTitle ? -1 : 0));
+          const completed = pipelineStatus.novels.filter((n) => n.collection_done);
 
-            return (
-          <div className="mt-8 bg-white dark:bg-gray-800 rounded-lg shadow p-6">
-            <h2 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">
-              진행 중인 작업
-            </h2>
-            <div className="space-y-4">
-              <div className="flex items-center justify-between text-sm">
-                <span className="text-gray-600 dark:text-gray-400">파이프라인 루프</span>
-                <span className={`font-medium px-2 py-0.5 rounded ${pipelineStatus.loop_running ? "bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200" : "bg-gray-100 text-gray-600 dark:bg-gray-700 dark:text-gray-400"}`}>
-                  {pipelineStatus.loop_running ? "실행 중" : "중지됨"}
-                </span>
-              </div>
+          const fmtEta = (sec?: number | null): string | null => {
+            if (!sec || sec <= 0) return null;
+            const totalMin = Math.ceil(sec / 60);
+            const days = Math.floor(totalMin / 1440);
+            const hours = Math.floor((totalMin % 1440) / 60);
+            const mins = totalMin % 60;
+            const d = days > 0 ? `${days}일 ` : "";
+            const h = hours > 0 ? `${hours}시간 ` : "";
+            const m = mins > 0 ? `${mins}분` : "";
+            const approx = days > 0 ? `(약 ${days}일)` : "";
+            return `${d}${h}${m}${approx}`.trim();
+          };
+          const pct = (s: number, t: number) => (t > 0 ? Math.min(100, Math.round((s / t) * 100)) : 0);
+          const statusLabel = (s?: string) => {
+            if (s === "완결") return "완결";
+            if (s === "단편") return "단편";
+            return "연재 중";
+          };
 
-              {/* bookto31 수집 현황 */}
-              {collectTarget && (
-                <div className="text-sm">
-                  <div className="flex items-center justify-between mb-1">
-                    <span className="text-gray-600 dark:text-gray-400">
-                      {collectTarget.source || "bookto31"} 수집
-                    </span>
-                    <span className="font-medium text-gray-900 dark:text-white">
-                      {cur ? "수집 중" : "다음 대상"}
-                    </span>
+          return (
+            <>
+              {inProgress.length > 0 && (
+                <div className="mt-8 bg-white dark:bg-gray-800 rounded-lg shadow p-6">
+                  <h2 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">
+                    진행 중인 작업
+                  </h2>
+                  <div className="space-y-5">
+                    {inProgress.map((n) => {
+                      const p = pct(n.saved, n.total);
+                      const eta = fmtEta(n.eta_seconds);
+                      return (
+                        <div key={n.id}>
+                          <p className="font-medium text-gray-900 dark:text-white mb-1">{n.title}</p>
+                          <div className="w-full h-3 bg-gray-200 dark:bg-gray-700 rounded-full overflow-hidden mb-1">
+                            <div
+                              className="h-full bg-blue-600 transition-all duration-500"
+                              style={{ width: `${p}%` }}
+                            />
+                          </div>
+                          <p className="text-sm text-gray-600 dark:text-gray-400">
+                            {n.saved}/{n.total} ({p}%)
+                            {eta && <span className="ml-2">· 예상 완료까지 {eta}</span>}
+                          </p>
+                        </div>
+                      );
+                    })}
                   </div>
+                </div>
+              )}
 
-                  <p className="text-gray-900 dark:text-white font-medium mb-2">
-                    {collectTarget.novel_title || "제목 확인 중"}
-                    {collectTarget.chapter ? ` · ${collectTarget.chapter}화` : ""}
-                    {collectTarget.wr_id ? ` (wr_id ${collectTarget.wr_id})` : ""}
-                    {cur?.attempt && cur.attempt > 1 ? ` · 시도 ${cur.attempt}/3` : ""}
-                  </p>
-
-                  {progress && (
-                    <>
-                      <div className="w-full h-3 bg-gray-200 dark:bg-gray-700 rounded-full overflow-hidden">
-                        <div
-                          className="h-full bg-blue-600 rounded-full transition-all duration-500"
-                          style={{ width: `${pct}%` }}
-                        />
+              {completed.length > 0 && (
+                <div className="mt-8 bg-white dark:bg-gray-800 rounded-lg shadow p-6">
+                  <h2 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">
+                    완료된 작업
+                  </h2>
+                  <div className="space-y-2">
+                    {completed.map((n) => (
+                      <div key={n.id} className="flex items-center justify-between text-sm">
+                        <span className="text-gray-900 dark:text-white font-medium">{n.title}</span>
+                        <span className="flex items-center gap-2">
+                          <span className="text-xs px-2 py-0.5 rounded bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300">
+                            {n.saved}화
+                          </span>
+                          <span
+                            className={`text-xs px-2 py-0.5 rounded text-white ${
+                              n.status === "완결" ? "bg-gray-700" : "bg-blue-600"
+                            }`}
+                          >
+                            [{statusLabel(n.status)}]
+                          </span>
+                        </span>
                       </div>
-                      <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
-                        {total > 0
-                          ? `${index}/${total} · 완료 ${processed} · 남음 ${remaining}`
-                          : `완료 ${processed} · 남음 ${remaining}`}
-                      </p>
-                    </>
-                  )}
-                </div>
-              )}
-
-              {/* 현재 처리 중인 회차 */}
-              {progress && !collectTarget && (
-                <div className="text-sm">
-                  <div className="flex items-center justify-between mb-1">
-                    <span className="text-gray-600 dark:text-gray-400">
-                      {progress.phase === "collect" ? "수집 진행도" : progress.phase === "loop" ? "루프 대기" : "현재 작업"}
-                    </span>
-                    <span className="font-medium text-gray-900 dark:text-white">
-                      {progress.phase === "collect" ? "준비 중" : "완료"}
-                    </span>
-                  </div>
-                  <div className="w-full h-3 bg-gray-200 dark:bg-gray-700 rounded-full overflow-hidden">
-                    <div
-                      className="h-full bg-blue-600 rounded-full transition-all duration-500"
-                      style={{ width: `${pct}%` }}
-                    />
-                  </div>
-                  <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
-                    {total > 0
-                      ? `${index}/${total} · 완료 ${processed} · 남음 ${remaining}`
-                      : `완료 ${processed} · 남음 ${remaining}`}
-                  </p>
-                </div>
-              )}
-
-              <div>
-                <div className="flex items-center justify-between text-sm mb-1">
-                  <span className="text-gray-600 dark:text-gray-400">큐 진행도</span>
-                  <span className="font-medium text-gray-900 dark:text-white">
-                    {pipelineStatus.queue.total > 0
-                      ? `${pipelineStatus.queue.total}개 대기 중`
-                      : "대기열 비어있음"}
-                  </span>
-                </div>
-                <div className="w-full h-3 bg-gray-200 dark:bg-gray-700 rounded-full overflow-hidden">
-                  <div
-                    className="h-full bg-blue-600 transition-all duration-300"
-                    style={{
-                      width: pipelineStatus.queue.total > 0 ? "100%" : "0%",
-                    }}
-                  />
-                </div>
-              </div>
-
-              {pipelineStatus.queue.by_source && Object.keys(pipelineStatus.queue.by_source).length > 0 && (
-                <div className="text-sm text-gray-600 dark:text-gray-400">
-                  <div className="font-medium text-gray-900 dark:text-white mb-1">소스별 대기열</div>
-                  <div className="flex flex-wrap gap-2">
-                    {Object.entries(pipelineStatus.queue.by_source).map(([source, count]) => (
-                      <span
-                        key={source}
-                        className="px-2 py-0.5 bg-gray-100 dark:bg-gray-700 rounded text-xs"
-                      >
-                        {source}: {count}개
-                      </span>
                     ))}
                   </div>
                 </div>
               )}
-
-              {pipelineStatus.queue.by_novel && Object.keys(pipelineStatus.queue.by_novel).length > 0 && (
-                <div className="text-sm text-gray-600 dark:text-gray-400">
-                  <div className="font-medium text-gray-900 dark:text-white mb-1">작품별 대기열</div>
-                  <div className="flex flex-wrap gap-2">
-                    {Object.entries(pipelineStatus.queue.by_novel).map(([title, count]) => (
-                      <span
-                        key={title}
-                        className="px-2 py-0.5 bg-gray-100 dark:bg-gray-700 rounded text-xs"
-                      >
-                        {title}: {count}개
-                      </span>
-                    ))}
-                  </div>
-                </div>
-              )}
-            </div>
-            <p className="mt-4 text-xs text-gray-500 dark:text-gray-400">
-              3초마다 자동 새로고침 · 진행 중인 작업이 없으면 숨겨집니다.
-            </p>
-          </div>
-            );
-          })()
-        )}
-
-        {/* 소설 목록 */}
-        {pipelineStatus?.novels && pipelineStatus.novels.length > 0 && (
-          <div className="mt-8 bg-white dark:bg-gray-800 rounded-lg shadow p-6">
-            <h2 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">
-              소설 목록
-            </h2>
-            <div className="space-y-2">
-              {pipelineStatus.novels.map((novel) => {
-                const pct = novel.total > 0
-                  ? Math.min(100, Math.round((novel.saved / novel.total) * 100))
-                  : novel.completed ? 100 : 0;
-                const statusLabel = novel.completed
-                  ? "완료"
-                  : novel.queued
-                    ? "수집 중"
-                    : novel.serializing
-                      ? "연재 중"
-                      : "대기";
-                const statusClass = novel.completed
-                  ? "bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200"
-                  : novel.queued
-                    ? "bg-yellow-100 text-yellow-800 dark:bg-yellow-900 dark:text-yellow-200"
-                    : novel.serializing
-                      ? "bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200"
-                      : "bg-gray-100 text-gray-600 dark:bg-gray-700 dark:text-gray-400";
-                return (
-                  <div key={novel.id} className="flex items-center gap-3 text-sm">
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center justify-between mb-0.5">
-                        <span className="font-medium text-gray-900 dark:text-white truncate">
-                          {novel.title}
-                        </span>
-                        <span className={`ml-2 text-xs px-2 py-0.5 rounded shrink-0 ${statusClass}`}>
-                          {statusLabel}
-                        </span>
-                      </div>
-                      <div className="w-full h-2 bg-gray-200 dark:bg-gray-700 rounded-full overflow-hidden">
-                        <div
-                          className={`h-full transition-all duration-500 ${
-                            novel.completed ? "bg-green-500" : "bg-blue-600"
-                          }`}
-                          style={{ width: `${pct}%` }}
-                        />
-                      </div>
-                    </div>
-                    <span className="text-xs text-gray-500 dark:text-gray-400 shrink-0">
-                      {novel.saved}/{novel.total}
-                    </span>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-        )}
+            </>
+          );
+        })()}
       </div>
     </div>
   );

@@ -15,19 +15,19 @@ URL 패턴:
   newtoki:  https://toki31.com/novel/58455
 """
 
-import asyncio
 import json
 import logging
 import os
 import re
 import subprocess
-import sys
 import threading
 from pathlib import Path
 from typing import Optional, Tuple
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
+
+from services.data import resolve_status
 
 log = logging.getLogger("pipeline_router")
 
@@ -188,11 +188,51 @@ def get_queue_stats() -> dict:
 NOVELS_DIR = Path("/opt/ai_data/flaresolverr/novels")
 
 
-def get_novel_status() -> list[dict]:
-    """모든 소설의 저장 상태 + 완료 여부 목록.
+def _estimate_seconds_per_chapter(novel_dir: Path, fallback: int = 300) -> int:
+    """최근 수집 간격으로 '챕터당 소요시간(초)' 추정.
 
-    완료 판정: meta.status == "완결" 이면 완료.
-    연재중 작품은 queue가 비어 있어도 계속 수집 대상이므로 "연재 중"으로 표시.
+    최근 5개 챕터의 collected_at 간격 평균. 데이터 없으면 fallback.
+    bookto31은 적응형 딜레이(300~600초), toki31은 5~60초.
+    """
+    stamps = []
+    for f in novel_dir.glob("*.json"):
+        if f.name in ("meta.json", "_chapters_index.json") or not f.stem.isdigit():
+            continue
+        try:
+            with open(f, encoding="utf-8") as fh:
+                d = json.load(fh)
+            t = (d.get("collected_at") or "").strip()
+            if t:
+                if t.endswith("Z"):
+                    t = t[:-1] + "+00:00"
+                stamps.append(t)
+        except Exception:
+            continue
+    if len(stamps) < 2:
+        return fallback
+    stamps.sort()
+    from datetime import datetime
+    try:
+        times = [datetime.fromisoformat(t) for t in stamps[-6:]]
+        gaps = [
+            (times[i + 1] - times[i]).total_seconds()
+            for i in range(len(times) - 1)
+        ]
+        gaps = [g for g in gaps if g > 0]
+        if not gaps:
+            return fallback
+        avg = sum(gaps) / len(gaps)
+        return int(max(10, min(avg, 3600)))
+    except Exception:
+        return fallback
+
+
+def get_novel_status() -> list[dict]:
+    """모든 소설의 저장 상태 + 수집 완료 여부 목록.
+
+    - collection_done: queue가 비어 있고 saved == total (수집 작업 완료)
+    - status: 완결/연재중/단편 (메타데이터 기반 + fallback 추론)
+    - eta_seconds: 수집 중(collection_done=False)일 때 남은 예상 시간(초)
     """
     novels = []
     try:
@@ -209,7 +249,7 @@ def get_novel_status() -> list[dict]:
             except Exception:
                 pass
         for novel_dir in sorted(NOVELS_DIR.iterdir()):
-            if not novel_dir.is_dir():
+            if not novel_dir.is_dir() or novel_dir.name.startswith("."):
                 continue
             meta_file = novel_dir / "meta.json"
             meta = {}
@@ -226,25 +266,27 @@ def get_novel_status() -> list[dict]:
                     continue
                 saved += 1
             title = meta.get("title") or novel_dir.name.replace("_", " ")
-            status = meta.get("status") or "unknown"
-            completed = status == "완결"
-            is_serial = status in ("연재중", "연재") or not completed
+            status = resolve_status(meta, novel_dir)
             queued = title in queued_titles
             # totalChapters가 부정확(1 등)하거나, queue에 회차가 있으면
             # 실제 대상 회차 수 = 저장된 수 + 큐 대기 수로 계산
             meta_total = meta.get("totalChapters") or 0
+            q_count = 0
+            if queued and QUEUE_FILE.exists():
+                try:
+                    with open(QUEUE_FILE, encoding="utf-8") as f:
+                        q_count = sum(1 for it in json.load(f) if it.get("novel_title") == title)
+                except Exception:
+                    pass
             if queued:
-                # queue에 있는 이 작품 회차 수
-                q_count = 0
-                if QUEUE_FILE.exists():
-                    try:
-                        with open(QUEUE_FILE, encoding="utf-8") as f:
-                            q_count = sum(1 for it in json.load(f) if it.get("novel_title") == title)
-                    except Exception:
-                        pass
                 total = saved + q_count
             else:
                 total = meta_total if meta_total >= saved else saved
+            collection_done = (not queued) and (total > 0) and (saved >= total)
+            eta_seconds = None
+            if not collection_done and q_count > 0:
+                per = _estimate_seconds_per_chapter(novel_dir)
+                eta_seconds = q_count * per
             novels.append({
                 "id": novel_dir.name,
                 "title": title,
@@ -252,8 +294,8 @@ def get_novel_status() -> list[dict]:
                 "total": total,
                 "status": status,
                 "queued": queued,
-                "serializing": is_serial,
-                "completed": completed,
+                "collection_done": collection_done,
+                "eta_seconds": eta_seconds,
             })
     except Exception as e:
         log.warning(f"novel status 조회 실패: {e}")
@@ -306,7 +348,7 @@ async def start_pipeline(req: StartPipelineRequest):
     if not source or not novel_id:
         raise HTTPException(
             status_code=400,
-            detail=f"지원하지 않는 URL 형식입니다. bookto31.com 또는 toki31.com URL이어야 합니다.",
+            detail="지원하지 않는 URL 형식입니다. bookto31.com 또는 toki31.com URL이어야 합니다.",
         )
 
     # 3. 중복 시작 방지

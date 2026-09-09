@@ -59,7 +59,7 @@ export default async function Home() {
                     {novel.title}
                   </div>
                 )}
-                {novel.status && novel.status !== "unknown" && (
+                {novel.status && (
                   <span
                     className={
                       "absolute top-2 right-2 px-2 py-1 text-white text-xs rounded " +
@@ -70,7 +70,7 @@ export default async function Home() {
                         : "bg-blue-600")
                     }
                   >
-                    {novel.status}
+                    {novel.status === "연재중" ? "연재 중" : novel.status}
                   </span>
                 )}
               </div>

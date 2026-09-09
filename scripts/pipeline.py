@@ -131,6 +131,8 @@ def run_discover(wr_id: int, novel_title: str = "", max_pages: int = 50, source:
 
     # epage 파라미터로 페이지네이션 (select 드롭다운 회차 목록)
     # 화산귀환 등 일부 작품은 spage로 페이징되므로 둘 다 시도
+    # 전체 회차를 확인하기 위해 max_pages 상한을 크게 잡고, 회차가 없으면 자동 중단
+    max_pages = max(max_pages, 200)
     for page_param in ("epage", "spage"):
         page_seen = set()
         for page in range(1, max_pages + 1):
@@ -580,7 +582,7 @@ def _auto_discover(source: str = "bookto31") -> None:
             continue
         log.info(f"  auto-discover: {title} (main_wr_id={main_wr_id})")
         try:
-            run_discover(int(main_wr_id), title, max_pages=8, source=source)
+            run_discover(int(main_wr_id), title, max_pages=200, source=source)
         except Exception as e:
             log.warning(f"  {title} discover 실패: {e}")
 

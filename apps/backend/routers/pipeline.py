@@ -106,9 +106,10 @@ def _run_pipeline_job(source: str, novel_id: str) -> None:
 
     _update(status="회차 탐색 중")
     try:
+        # 전체 회차 확인 (max_pages 200) — 시간이 걸릴 수 있어 timeout 넉넉히
         result = subprocess.run(
-            ["python3", script, "discover", novel_id, title, "50", "--source", source],
-            capture_output=True, text=True, timeout=120,
+            ["python3", script, "discover", novel_id, title, "200", "--source", source],
+            capture_output=True, text=True, timeout=1500,
         )
         if result.returncode != 0:
             log.warning(f"discover 오류: {result.stderr[:500]}")

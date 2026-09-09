@@ -4,6 +4,23 @@
 
 ## 2026-09-09 (최신)
 
+### discover 재발 방지 패치 (회차 누락 예방)
+- **원인 확인**: 잘못된 main_wr_id(예: 게임=42424)로 discover하면 bookto31 페이지에
+  **에피소드 셀렉트가 0개** → `extract_chapter_wr_ids_from_index` 빈 결과 → 즉시 중단, 초반부 누락
+- **`run_discover`**: 전달 wr_id로 아무 회차도 못 찾으면 **저장된 챕터 wr_id로 자동 재시도**
+- **`run_discover` 종료 조건**: 신규 0회가 **1회→2연속**일 때만 중단 (윈도우 1회성 겹침으로 조기 중단 방지)
+- **`_auto_discover`**: main_wr_id가 없어도 **저장된 챕터에서 wr_id를 유도**해 월간 재-discover
+  (이전엔 main_wr_id 없는 소설이 안전망에서 제외 → 게임 소설이 수개월 누락된 채 방치된 원인)
+
+### 회차 수 누락 버그 수정 (discover 불완전)
+- **증상**: 게임_속_바바리안이 30/240으로 표시되지만 소스(bookto31)에 1~897화가 존재
+- **원인**: 초기 discover가 잘못된 main_wr_id(42424)로 실행 → epage 페이지네이션의 일부만 수집 (658~897 누락 없이 초반부 1~657 전부 누락)
+- **수정**: 게임 소설 재-discover → 큐 210→867개, **1~897화 완전 확보**
+- **추가 발견·수정**: 오늘만_사는_기사도 451~476(26화) 갭 → 재-discover로 1~839화 완전
+  - 화산귀환(1~1922), 하남자(1~557), 아포(1~287)는 완전 확인
+- **교훈**: `epage`/`spage` 페이지네이션은 소스 전체를 커버해야 함. main_wr_id 오기록 시 불완전 → 월간 `_auto_discover`가 백필 (단, main_wr_id 없는 소설은 제외되므로 주의)
+- **수정 데이터**: 게임 meta main_wr_id=42500, totalChapters=897 / 오늘만 totalChapters=839
+
 ### 버그 수정: namu rate-limit 블로킹 + ETA 성능
 - **namu.wiki 30분 rate limit이 수집을 블로킹하던 문제 수정**
   - `run_all`: ENRICH를 bulk collect **이후**로 이동 (이전엔 namu 대기 때문에 수집 시작이 최대 30분 지연)

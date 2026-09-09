@@ -225,6 +225,7 @@ def run_discover(wr_id: int, novel_title: str = "", max_pages: int = 50, source:
     max_pages = max(max_pages, 200)
     for page_param in ("epage", "spage"):
         page_seen = set()
+        no_new_count = 0
         for page in range(1, max_pages + 1):
             url = f"https://bookto31.com/bbs/board.php?bo_table=novel&wr_id={wr_id}&{page_param}={page}"
             html = fs.fetch(url)
@@ -257,7 +258,12 @@ def run_discover(wr_id: int, novel_title: str = "", max_pages: int = 50, source:
                     page_seen.add(ch_wr_id)
                     new += 1
             log.info(f"  {page_param}={page}: {new}개 신규 (누적 {len(all_chapters)})")
-            if new == 0 and page > 1:
+            # 신규 0이 2연속이면 (윈도우 반복/끝) 중단 — 1회성 겹침으로 조기 중단되지 않게
+            if new == 0:
+                no_new_count += 1
+            else:
+                no_new_count = 0
+            if no_new_count >= 2 and page > 1:
                 break
             # 같은 페이지가 반복되면 (epage를 무시하는 작품) 다음 파라미터로
             if new == 0 and page >= 1 and page_seen and all(c in page_seen for c, _ in page_chapters):
@@ -267,6 +273,37 @@ def run_discover(wr_id: int, novel_title: str = "", max_pages: int = 50, source:
     # 큐에 추가 (queue에 이미 있거나, 파일로 이미 저장된 회차는 제외)
     queue = _load_queue()
     existing_ids = {item['wr_id'] for item in queue}
+
+    # 전달된 wr_id로 아무 회차도 발견 못 했으면 (잘못된 main_wr_id 케이스),
+    # 저장된 챕터에서 유효한 wr_id를 뽑아 재시도. (에피소드 셀렉트가 0개 나옴)
+    if not all_chapters and not dry_run:
+        novel_id_dir = novel_title.replace(' ', '_').replace('/', '_') if novel_title else f"novel_{wr_id}"
+        novel_dir = Path('/opt/ai_data/flaresolverr/novels') / novel_id_dir
+        saved_wr = None
+        if novel_dir.exists():
+            for f in sorted(novel_dir.glob("*.json"), key=lambda p: int(p.stem)):
+                if f.name in ("meta.json", "_chapters_index.json") or not f.stem.isdigit():
+                    continue
+                saved_wr = int(f.stem)
+                break
+        if saved_wr and saved_wr != wr_id:
+            log.warning(f"  wr_id={wr_id}로 회차 발견 실패 → 저장된 챕터 wr_id={saved_wr}로 재시도")
+            for page_param in ("epage", "spage"):
+                for page in range(1, min(max_pages, 200) + 1):
+                    url = f"https://bookto31.com/bbs/board.php?bo_table=novel&wr_id={saved_wr}&{page_param}={page}"
+                    html = fs.fetch(url)
+                    if not html or len(html) < 1000:
+                        break
+                    page_chapters = extract_chapter_wr_ids_from_index(html)
+                    if not page_chapters:
+                        break
+                    for ch_wr_id, chapter in page_chapters:
+                        if ch_wr_id not in seen and ch_wr_id != saved_wr:
+                            seen.add(ch_wr_id)
+                            all_chapters.append((ch_wr_id, chapter))
+                    if not page_chapters or all(c[0] in seen for c in page_chapters):
+                        break
+
     # 이미 저장된 회차 (동일 작품 디렉토리의 wr_id.json)
     saved_ids = set()
     try:
@@ -821,6 +858,15 @@ def _auto_discover(source: str = "bookto31") -> None:
             continue
         main_wr_id = meta.get('main_wr_id')
         title = meta.get('title') or novel_dir.name.replace('_', ' ')
+        # main_wr_id가 없거나 잘못됐을 수 있으므로, 기존 챕터에서 유효한 wr_id를 유도.
+        # (main_wr_id가 틀리면 discover가 에피소드 셀렉트를 못 읽고 빈 결과로 끝남 — 재발 방지)
+        if not main_wr_id:
+            for f in novel_dir.glob("*.json"):
+                if f.name in ("meta.json", "_chapters_index.json") or not f.stem.isdigit():
+                    continue
+                main_wr_id = int(f.stem)
+                log.info(f"  {title}: main_wr_id 없음 → 저장된 챕터에서 유도 ({main_wr_id})")
+                break
         if not main_wr_id:
             continue
         log.info(f"  auto-discover: {title} (main_wr_id={main_wr_id})")

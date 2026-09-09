@@ -4,6 +4,21 @@
 
 ## 2026-09-09 (최신)
 
+### Neon DB 의존성 제거
+- **정책 변경**: Neon DB 사용 중단 → 모든 데이터를 devforge 백엔드(파일시스템)에서 직접 제공
+- **`app/api/[...slug]/route.ts`**: `proxyToNeon()`/`proxyNovelChapters()` 제거, 모든 경로 devforge 프록시로 단순화
+- **`app/api/neon/novels/route.ts`**, **`app/api/novels/[id]/chapters/route.ts`** 삭제
+- **`package.json`**: `@neondatabase/serverless` 의존성 제거
+- **`services/ebook_sync.py`** 삭제 (Neon 동기화 모듈, 참조 없음)
+
+### 회차 번호 오염 수정 (1화→2화 탐색 복구)
+- **근본 원인**: `save_chapter`가 회차번호 추출 실패 시 `wr_id`로 폴백 → `chapter`/`title` 오염
+- **`lib/storage.py`**: 폴백 제거, 추출 실패 시 `chapter=None` 유지 / `_extract_chapter_num` 다중 라인 지원
+- **데이터 복구**: 아포칼립스의_고인물 286개 파일을 toki31 에피소드 API 기준으로 1~287화 재번호
+- **`services/data.py`**: 이전/다음 화·목록 정렬을 wr_id → **chapter 번호** 기준으로 변경
+  - 화산귀환(1922화가 wr_id 최소), 게임_속_바바리안(891화가 868화 앞) 등 순서 오류 해결
+- **`NovelClient.tsx` / `ChapterClient.tsx`**: "회차 목록으로 돌아가기" 페이지 계산을 focus 챕터 위치 기반으로 수정
+
 ### 파이프라인 안정성 강화 (업계 표준 반영)
 - **systemd WatchdogSec + on-watchdog**: `pipeline.py`에 `_sd_notify()` 추가
   - `Type=simple` → `Type=notify`, `Restart=on-failure` → `on-watchdog`, `WatchdogSec=600`

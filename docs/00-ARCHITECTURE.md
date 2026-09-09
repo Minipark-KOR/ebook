@@ -171,7 +171,7 @@ COLLECTORS = {
           │ GET /api/novels/{id} (devforge 폴백)
           ▼
 ┌────────────────────┐
-│ Vercel /api/[...]  │ ← catch-all 프록시 (Neon 미설정 시 devforge 폴백)
+│ Vercel /api/[...]  │ ← catch-all 프록시 (모든 요청 devforge로 프록시)
 └─────────┬──────────┘
           │
           ▼

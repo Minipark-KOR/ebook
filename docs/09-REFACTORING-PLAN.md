@@ -48,7 +48,7 @@ apps/backend/
 │   │   └── imports _fetch_with_flaresolverr from bookto31 ← ❌
 │   │
 │   ├── data.py                  # JSON 파일 읽기 서비스 (웹페이지용)
-│   ├── ebook_sync.py            # Neon DB 동기화
+
 │   ├── epub.py                  # EPUB 생성
 │   └── metadata.py              # Google Books/OpenLibrary 메타데이터
 
@@ -164,7 +164,6 @@ apps/backend/
 │   │   └── bookto31 import 제거 ✅
 │   │
 │   ├── data.py                  # ✅ 변경 없음
-│   ├── ebook_sync.py            # ✅ 변경 없음
 │   ├── epub.py                  # ✅ 변경 없음
 │   └── metadata.py              # ✅ 변경 없음
 
@@ -367,7 +366,6 @@ def get_novel_dir(novel_title: str) -> Path:
 | `routers/chapters.py` | bookto31/toki31 미참조 |
 | `routers/metadata.py` | bookto31/toki31 미참조 |
 | `services/data.py` | JSON 파일 읽기만 수행 |
-| `services/ebook_sync.py` | bookto31/toki31 미참조 |
 | `services/epub.py` | bookto31/toki31 미참조 |
 | `services/metadata.py` | bookto31/toki31 미참조 |
 | `main.py` | 라우터 등록만 수행 |
@@ -652,7 +650,7 @@ apps/backend/
 │   │   └── imports _fetch_with_flaresolverr from bookto31 ← ❌
 │   │
 │   ├── data.py                  # JSON 파일 읽기 서비스 (웹페이지용)
-│   ├── ebook_sync.py            # Neon DB 동기화
+
 │   ├── epub.py                  # EPUB 생성
 │   └── metadata.py              # Google Books/OpenLibrary 메타데이터
 

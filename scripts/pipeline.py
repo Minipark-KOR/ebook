@@ -462,8 +462,19 @@ def _save_queue(queue: list) -> None:
 
 
 def _save_chapter_only(novel_title: str, wr_id: int, body: str, chapter_num: Optional[int] = None, source: str = "bookto31") -> bool:
-    """순수 저장 (enrich/index/revalidate 없이)."""
+    """순수 저장 (enrich/index/revalidate 없이).
+
+    body가 튜플 (title, content)이면 (newtoki/toki31 collector) content만 사용.
+    """
     from lib.storage import save_chapter as _save
+
+    if isinstance(body, tuple) and len(body) == 2:
+        # (title, content) → content 사용
+        content = body[1]
+        if chapter_num is None:
+            from lib.storage import _extract_chapter_num
+            chapter_num = _extract_chapter_num(content)
+        body = content
 
     save_kwargs = {"source": source}
     if chapter_num is not None:

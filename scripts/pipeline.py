@@ -616,18 +616,25 @@ def _invalidate_saved_chapters(novel_title: str) -> None:
 def _run_collect_locked(limit: int = 0, source_filter: str = "") -> dict:
     """run_collect 본체 (락 보유 상태에서 실행).
 
-    트래픽 가드: 일일 한도 초과 시 회차를 처리하지 않고 즉시 반환한다.
-    (loop는 다음 날 자정에 자동 재개 — queue는 보존)
+    트래픽 가드: 유료 프록시 소스(traffic_limited=True, 예: toki31)의
+    일일 한도 초과 시 해당 소스만 중단. bookto31(FlareSolverr 로컬)은
+    트래픽 가드와 무관하게 계속 처리된다.
+    (loop는 소스별로 순회하므로 한 소스의 중단이 다른 소스를 막지 않음)
     """
+    from lib.sources import get_traffic_limited
     from lib.traffic_guard import reset_if_new_day, is_exceeded, add_bytes, summary
     from lib.toki31_playwright import get_traffic_total_bytes
 
+    # 트래픽 가드 적용 여부 — 특정 소스 필터 시 그 소스가 유료 프록시인지에 따라.
+    # source_filter가 없으면(전체) 유료 소스 포함 가능 → 가드 적용.
+    traffic_limited = (not source_filter) or get_traffic_limited(source_filter)
+
     reset_if_new_day()
-    if is_exceeded():
+    if traffic_limited and is_exceeded():
         s = summary()
         log.warning(
             f"  ⏸ 일일 트래픽 한도 초과 ({s['used_mb']}MB/{s['daily_limit_mb']}MB) "
-            f"— 자정까지 수집 중단 (queue {len(_load_queue())}건 보존)"
+            f"— 자정까지 {source_filter or '유료 소스'} 중단 (queue {len(_load_queue())}건 보존)"
         )
         return {"processed": 0, "errors": [], "remaining": len(_load_queue()), "traffic_exceeded": True}
 
@@ -756,7 +763,8 @@ def _run_collect_locked(limit: int = 0, source_filter: str = "") -> dict:
             time.sleep(delay)
 
         # 일일 한도 도달 시 남은 회차는 다음 날 재개 (현재 회차는 위에서 처리/저장 완료)
-        if is_exceeded():
+        # 유료 프록시 소스에만 적용 (bookto31 등 무료 소스는 계속)
+        if traffic_limited and is_exceeded():
             s = summary()
             log.warning(
                 f"  ⏸ 일일 트래픽 한도 도달 ({s['used_mb']}MB/{s['daily_limit_mb']}MB) "
@@ -1315,23 +1323,30 @@ def main():
                     else:
                         pass
 
-                # collect (1개씩, 모든 소스 처리 — 다중 소스)
-                result = run_collect(limit=1)
+                # collect — 소스별 1개씩 처리 (처리 격리)
+                # toki31(유료 프록시)이 일일 한도/실패로 중단돼도 bookto31(무료)은 계속.
+                from lib.sources import list_sources
+                sources = list_sources()
+                cycle_processed = 0
+                cycle_remaining = 0
+                traffic_exceeded_any = False
+                for src in sources:
+                    result = run_collect(limit=1, source_filter=src)
+                    cycle_processed += result.get('processed', 0)
+                    cycle_remaining += result.get('remaining', 0)
+                    if result.get('traffic_exceeded'):
+                        traffic_exceeded_any = True
+                        log.warning(f"  [{src}] 일일 트래픽 한도 도달 — {src}만 자정까지 대기")
 
-                # 일일 트래픽 한도 초과 → 자정까지 대기 후 자동 재개
-                if result.get('traffic_exceeded'):
-                    from lib.traffic_guard import seconds_until_next_day, summary
-                    _s = summary()
+                # 유료 소스가 전부 한도 도달이면 자정까지 대기 (무료 소스는 위에서 이미 처리)
+                if traffic_exceeded_any and cycle_processed == 0:
+                    from lib.traffic_guard import seconds_until_next_day
                     wait = seconds_until_next_day()
-                    log.warning(
-                        f"⏸ 일일 한도 도달 ({_s['used_mb']}MB/{_s['daily_limit_mb']}MB) "
-                        f"— {wait}초(자정) 후 재개"
-                    )
-                    _write_status({"phase": "paused_traffic", "resume_in_sec": wait})
-                    time.sleep(wait)
+                    log.info(f"  ⏸ 유료 소스 한도 도달 — {wait}초(자정) 후 재개")
+                    time.sleep(min(wait, 300))
                     continue
 
-                if result['processed'] == 0 and result['remaining'] == 0:
+                if cycle_processed == 0 and cycle_remaining == 0:
                     # 연재작: queue가 비어도 계속 대기 (새 회차 추가 대기)
                     log.info("큐 비어 있음 - 새 회차 대기 중")
                     log.info(f"  {cycle_delay}초 대기...")
@@ -1346,7 +1361,7 @@ def main():
                 if novel_title:
                     run_revalidate(novel_title)
 
-                log.info(f"--- Cycle {cycle} 완료 (남은 작업: {result['remaining']}) ---")
+                log.info(f"--- Cycle {cycle} 완료 (처리: {cycle_processed}, 남음: {cycle_remaining}) ---")
 
                 # 큐가 비었으면 계속 대기 (연재작)
                 remaining = _load_queue()

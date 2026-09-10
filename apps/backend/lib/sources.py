@@ -54,6 +54,9 @@ class SourceConfig(BaseModel):
     collector: str
     discover: str = "unknown"
     speed_hint_sec: int = Field(default=300, ge=1, le=86400)
+    # 프록시(유료 트래픽) 사용 여부 — True면 트래픽 가드(일일 한도) 적용.
+    # bookto31은 FlareSolverr 로컬(무료), toki31은 DataImpulse/MaskProxy(유료).
+    traffic_limited: bool = False
 
 
 class SourcesConfig(BaseModel):
@@ -115,6 +118,15 @@ def get_speed_hint(source: str) -> int:
     """소스의 ETA fallback 속도(초/화)."""
     cfg = load_sources().get(source)
     return cfg.speed_hint_sec if cfg else 300
+
+
+def get_traffic_limited(source: str) -> bool:
+    """프록시(유료 트래픽) 사용 여부 — 트래픽 가드 적용 대상인지.
+
+    toki31(DataImpulse/MaskProxy)만 True. bookto31(FlareSolverr 로컬)은 무료.
+    """
+    cfg = load_sources().get(source)
+    return bool(cfg.traffic_limited) if cfg else False
 
 
 def list_sources() -> list[str]:

@@ -4,13 +4,15 @@
     "base_url": "https://bookto31.com",
     "collector": "bookto31",
     "discover": "gnuboard",
-    "speed_hint_sec": 300
+    "speed_hint_sec": 300,
+    "traffic_limited": false
   },
   "toki31": {
     "domains": ["toki31.com", "newtoki31.com"],
     "base_url": "https://toki31.com",
     "collector": "toki31",
     "discover": "toki31_episodes",
-    "speed_hint_sec": 5
+    "speed_hint_sec": 5,
+    "traffic_limited": true
   }
 }

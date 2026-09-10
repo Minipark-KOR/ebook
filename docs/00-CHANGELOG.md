@@ -4,6 +4,18 @@
 
 ## 2026-09-10 (최신)
 
+### 소스별 처리 격리 (북토끼/뉴토끼 독립 동작)
+- **문제**: 단일 큐 + `run_collect(limit=1)` 전체 처리 → toki31(유료 프록시) 407/한도 도달 시
+  큐가 toki31로 가득 차면 bookto31이 굶어 죽음
+- **`sources.py`/`sources.json`**: `traffic_limited` 필드 추가
+  - bookto31 = false (FlareSolverr 로컬, 무료)
+  - toki31 = true (DataImpulse/MaskProxy, 유료)
+- **`_run_collect_locked`**: 트래픽 가드를 `traffic_limited` 소스에만 적용
+  - bookto31은 한도와 무관하게 계속 처리, toki31만 자정까지 대기
+- **`loop`**: `list_sources()` 순회하며 소스별 `run_collect(limit=1, source_filter=src)` 호출
+  - 유료 소스가 한도 도달해도 무료 소스는 계속
+  - 유료 전부 도달 시에만 자정 대기 (최대 300초 단위)
+
 ### 트래픽 절약 + 안전장치 (DataImpulse 소진 대응)
 - **문제**: toki31 수집이 회차마다 Chromium 새로 실행 + 이미지/폰트/CSS 전부 다운로드
   → 회차당 수 MB × 큐 2,031건 = DataImpulse 5GB 순식간 소진

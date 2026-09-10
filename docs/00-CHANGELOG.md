@@ -19,6 +19,15 @@
   - 일일 한도 `EBOOK_DAILY_TRAFFIC_LIMIT_MB` (기본 200MB) 초과 시 수집 일시정지
   - 날짜 변경 시 자동 리셋 → 다음 날 자정에 자동 재개
   - `pipeline.py traffic` 상태 조회 명령
+- **회차 단위 안전장치** (`toki31_playwright.py`):
+  - `novel-content` 페이로드 **60KB 초과 시 차단** (정상 ~24KB의 2.5배) — `TOKI31_CONTENT_MAX_KB`
+  - 회차별 총 트래픽 상한: **콜드(첫 로드) 1.5MB / 웜 1MB** — `TOKI31_CHAPTER_COLD_MAX_MB` / `TOKI31_CHAPTER_WARM_MAX_MB`
+  - 첫 로드 성공 시 `_is_cold=False` (JS 번들 캐시 완료), 브라우저 리셋 시 콜드 복귀
+- **재다운로드 방지 (소스 무관 dedup)** (`pipeline.py`):
+  - collect 전 이미 저장된 chapter 확인 → 다운로드 없이 스킵
+  - bookto31(gnuboard wr_id) / toki31(episode_id)가 **같은 chapter를 서로 다른 ID로
+    재발견하는 소스 간 중복**을 chapter 번호 기준으로 차단
+  - 소설별 저장 chapter 캐시 + 저장 후 무효화 (`_load_saved_chapters`/`_invalidate_saved_chapters`)
 - **`pipeline.py`**:
   - `_collect_newtoki` None 반환 시 `(False, ...)` → **TypeError 크래시 루프 해결**
   - `run_collect`: 한도 초과 시 조기 반환(`traffic_exceeded`) + 회차별 트래픽 누적

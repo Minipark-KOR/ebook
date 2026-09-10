@@ -544,6 +544,44 @@ def run_collect(limit: int = 0, source_filter: str = "") -> dict:
         _release_collect_lock()
 
 
+# 소설별 저장된 chapter 번호 캐시 (소스 무관 — 재다운로드 방지)
+# key: novel_id(공백→_), value: {chapter 번호}
+_saved_chapters_cache: dict[str, set] = {}
+
+
+def _load_saved_chapters(novel_title: str) -> set:
+    """소설 디렉토리에 이미 저장된 chapter 번호 집합 (source 무관).
+
+    어떤 소스(bookto31/toki31)로든 저장됐으면 포함한다. 소스 간 중복
+    (같은 chapter를 서로 다른 wr_id로 재발견)을 막기 위한 소스 무관 dedup.
+    """
+    novel_id = novel_title.replace(' ', '_').replace('/', '_')
+    if novel_id in _saved_chapters_cache:
+        return _saved_chapters_cache[novel_id]
+
+    novel_dir = Path('/opt/ai_data/flaresolverr/novels') / novel_id
+    saved: set = set()
+    if novel_dir.exists():
+        for f in novel_dir.glob("*.json"):
+            if f.name in ("meta.json", "_chapters_index.json"):
+                continue
+            try:
+                j = json.load(open(f, encoding='utf-8'))
+                ch = j.get('chapter')
+                if isinstance(ch, int):
+                    saved.add(ch)
+            except Exception:
+                pass
+    _saved_chapters_cache[novel_id] = saved
+    return saved
+
+
+def _invalidate_saved_chapters(novel_title: str) -> None:
+    """저장 후 캐시 무효화 — 다음 collect에서 재스캔하도록."""
+    novel_id = novel_title.replace(' ', '_').replace('/', '_')
+    _saved_chapters_cache.pop(novel_id, None)
+
+
 def _run_collect_locked(limit: int = 0, source_filter: str = "") -> dict:
     """run_collect 본체 (락 보유 상태에서 실행).
 
@@ -609,6 +647,17 @@ def _run_collect_locked(limit: int = 0, source_filter: str = "") -> dict:
 
         log.info(f"[{i+1}/{len(queue)}] wr_id={wr_id} ({novel_title}) source={source} 시도 {item['attempts']}/3")
 
+        # 재다운로드 방지: 소스 무관 이미 저장된 chapter면 다운로드 없이 스킵
+        # (bookto31/toki31이 같은 chapter를 서로 다른 wr_id로 재발견하는 경우 방지)
+        chapter_num = item.get('chapter')
+        if chapter_num is not None and novel_title:
+            if chapter_num in _load_saved_chapters(novel_title):
+                log.info(
+                    f"  ↷ chapter {chapter_num} 이미 저장됨 — 다운로드 스킵 (wr_id={wr_id})"
+                )
+                removed_ids.add(wr_id)
+                continue
+
         # collector 선택 (source별 분기)
         collector = COLLECTORS.get(source)
         if not collector:
@@ -650,6 +699,7 @@ def _run_collect_locked(limit: int = 0, source_filter: str = "") -> dict:
         # 저장 (enrich/index 없이 순수 저장)
         chapter_num = item.get('chapter') or chapter_num
         _save_chapter_only(novel_title, wr_id, body, chapter_num, source)
+        _invalidate_saved_chapters(novel_title)  # 캐시 갱신 — 이후 중복 스킵 정확성
         _body_len = body[1] if isinstance(body, tuple) and len(body) == 2 else body
         log.info(f"  ✓ wr_id={wr_id} 저장 완료 ({len(_body_len)} chars)")
 

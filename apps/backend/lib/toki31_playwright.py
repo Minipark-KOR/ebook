@@ -51,6 +51,13 @@ _BLOCKED_RESOURCE_TYPES = ("image", "font", "media", "stylesheet")
 # 프록시 인증/연결 실패 시 브라우저 리셋 임계값
 _RESET_AFTER_CONSECUTIVE_FAILURES = 3
 
+# 안전장치 한도 (환경변수로 오버라이드)
+# - novel-content API 페이로드 상한 (정상 ~24KB, 60KB 초과 시 비정상으로 판단)
+# - 회차당 총 트래픽 상한: 콜드(첫 로드, JS 번들 포함 ~0.7~1.1MB) / warm(~430KB)
+_NOVEL_CONTENT_MAX_BYTES = int(float(os.getenv('TOKI31_CONTENT_MAX_KB', '60'))) * 1024
+_CHAPTER_COLD_MAX_BYTES = int(float(os.getenv('TOKI31_CHAPTER_COLD_MAX_MB', '1.5')) * 1024 * 1024)
+_CHAPTER_WARM_MAX_BYTES = int(float(os.getenv('TOKI31_CHAPTER_WARM_MAX_MB', '1')) * 1024 * 1024)
+
 
 def _load_proxy_env():
     """Load proxy credentials from .env.local."""
@@ -187,6 +194,7 @@ class Toki31Collector:
         self._response_event = asyncio.Event()
         self._consecutive_failures = 0
         self._traffic_total = 0  # 프록시로 받은 총 응답 바이트 (실측, 수명 누적)
+        self._is_cold = True  # 브라우저 첫 로드 여부 (JS 번들 전체 다운로드 → 상한 높게)
         self._resolve_proxy()
 
     # --- 프록시 ---
@@ -258,9 +266,19 @@ class Toki31Collector:
                 try:
                     data = await response.json()
                     if data.get('ok') and data.get('payload'):
-                        self._content_payload['data'] = data
-                        self._response_event.set()
-                        logger.debug("novel-content response captured")
+                        payload = data['payload']
+                        payload_bytes = len(payload)
+                        # 안전장치: 본문 페이로드가 비정상 대용량이면 차단 (정상 ~24KB)
+                        if payload_bytes > _NOVEL_CONTENT_MAX_BYTES:
+                            logger.warning(
+                                f"novel-content 페이로드 비정상 대용량: {payload_bytes}B "
+                                f"(한도 {_NOVEL_CONTENT_MAX_BYTES}B) — 차단"
+                            )
+                            self._content_payload['oversized'] = True
+                        else:
+                            self._content_payload['data'] = data
+                            self._response_event.set()
+                            logger.debug(f"novel-content response captured ({payload_bytes}B)")
                 except Exception:
                     pass
 
@@ -296,6 +314,7 @@ class Toki31Collector:
         self._playwright = None
         self._content_payload = {}
         self._response_event = asyncio.Event()
+        self._is_cold = True  # 리셋 후 JS 번들 재다운로드 → 콜드 상한 적용
 
     # --- 챕터 수집 ---
 
@@ -316,6 +335,11 @@ class Toki31Collector:
 
         await self._ensure_started()
         page = self._page
+
+        # 회차별 트래픽 한도 — 첫 로드(콜드)는 JS 번들 전체로 상한 높게, 이후(웜)는 낮게
+        is_cold = self._is_cold
+        chapter_start_bytes = self._traffic_total
+        traffic_cap = _CHAPTER_COLD_MAX_BYTES if is_cold else _CHAPTER_WARM_MAX_BYTES
 
         # 이벤트 초기화 (이전 회차 응답 무시)
         self._response_event.clear()
@@ -356,6 +380,9 @@ class Toki31Collector:
 
         self._consecutive_failures = 0
 
+        # 첫 로드 성공 → JS 번들 캐시 완료. 이후 회차는 웜(낮은 상한) 적용
+        self._is_cold = False
+
         # 제목 추출 (페이지 타이틀)
         title_text = await page.title()
         if ' - ' in title_text:
@@ -369,6 +396,10 @@ class Toki31Collector:
                 await asyncio.wait_for(self._response_event.wait(), timeout=25)
             except asyncio.TimeoutError:
                 pass
+
+        if self._content_payload.get('oversized'):
+            logger.error("novel-content 페이로드 비정상 대용량 — 회차 차단")
+            return None
 
         if not self._content_payload.get('data'):
             logger.error("novel-content API response not received within 25s")
@@ -402,6 +433,15 @@ class Toki31Collector:
 
         if not content_text or len(content_text) < 50:
             logger.error(f"Failed to extract content from {target_url}")
+            return None
+
+        # 회차별 트래픽 한도 점검 — 비정상 대용량이면 차단 (정상: 콜드 ~1MB / 웜 ~430KB)
+        chapter_bytes = self._traffic_total - chapter_start_bytes
+        if chapter_bytes > traffic_cap:
+            logger.warning(
+                f"회차 트래픽 비정상 대용량: {chapter_bytes / 1024:.0f}KB "
+                f"(한도 {traffic_cap / 1024 / 1024:.1f}MB, {'콜드' if is_cold else '웜'}) — 회차 차단"
+            )
             return None
 
         return (title_text, content_text.strip())

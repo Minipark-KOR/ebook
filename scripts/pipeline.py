@@ -381,6 +381,35 @@ def discover_toki31(novel_id: int, novel_title: str = "", dry_run: bool = False)
     return added
 
 
+def _download_cover(novel_title: str, cover_url: str) -> Optional[str]:
+    """작품 표지를 로컬 covers/에 다운로드 → /api/covers 로컬 URL 반환.
+
+    웹툰 업로드 CDN(imgspeedtoki 등)은 서버에서 받을 수 있지만 og:image 호스트
+    (speedwebgo 등)는 403인 경우가 많다. 다운로드 가능한 CDN 표지가 있으면
+    로컬 저장을 우선해 image-proxy(502)에 의존하지 않는다.
+    실패 시 None (호출부에서 og:image 직접 URL 폴백).
+    """
+    import urllib.request
+    from urllib.parse import quote
+
+    novel_id = novel_title.replace(' ', '_').replace('/', '_')
+    ext = Path(cover_url.split('?')[0]).suffix.lower()
+    if ext not in ('.webp', '.jpg', '.jpeg', '.png'):
+        ext = '.jpg'
+    target = Path('/opt/ai_data/flaresolverr/covers') / f"{novel_id}{ext}"
+    try:
+        req = urllib.request.Request(cover_url, headers={'User-Agent': 'Mozilla/5.0'})
+        r = urllib.request.urlopen(req, timeout=20)
+        data = r.read()
+        if len(data) < 1000:  # 차단 페이지/에러 응답 방지
+            return None
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(data)
+        return f"/api/covers/{quote(target.name)}"
+    except Exception:
+        return None
+
+
 def _clean_page_title(title: str) -> str:
     """<title>에서 사이트명/회차 번호 접미 제거 → 순수 작품 제목.
 
@@ -423,6 +452,8 @@ def run_discover(wr_id: int, novel_title: str = "", max_pages: int = 50, source:
     seen = set()
     title = ""
     cover_url = ""
+    from lib.sources import get_media_type
+    media_type = get_media_type(source, bo_table)
 
     # dry_run: 첫 페이지만 fetch해서 제목 추출
     if dry_run:
@@ -461,12 +492,22 @@ def run_discover(wr_id: int, novel_title: str = "", max_pages: int = 50, source:
                     og_m = _re.search(r'<meta property="og:title" content="([^"]+)"', html)
                     if og_m:
                         title = _clean_page_title(og_m.group(1))
-            # 첫 페이지에서 표지(og:image) 추출 (웹툰 등 coverUrl 없음 대비)
+            # 첫 페이지에서 표지 추출 — 업로드 CDN cover 이미지를 로컬 저장 우선,
+            # 없으면 og:image(직접 URL) 폴백. (웹툰/소설 공통)
             if page == 1 and not cover_url and html:
                 import re as _re
-                ogi = _re.search(r'<meta property="og:image" content="([^"]+)"', html)
-                if ogi:
-                    cover_url = ogi.group(1).strip()
+                cover_cdn = _re.search(
+                    r'https?://[^"\'\s]*imgspeedtoki[^"\'\s]*/cover/[^"\'\s]+', html
+                )
+                local_cover = None
+                if cover_cdn:
+                    local_cover = _download_cover(title or novel_title or f"작품_{wr_id}", cover_cdn.group(0))
+                if local_cover:
+                    cover_url = local_cover
+                else:
+                    ogi = _re.search(r'<meta property="og:image" content="([^"]+)"', html)
+                    if ogi:
+                        cover_url = ogi.group(1).strip()
             if not html or len(html) < 1000:
                 log.info(f"  {page_param}={page}: 응답 없음, 중단")
                 break
@@ -535,8 +576,10 @@ def run_discover(wr_id: int, novel_title: str = "", max_pages: int = 50, source:
     saved_ids = set()
     try:
         novel_id_dir = novel_title.replace(' ', '_').replace('/', '_') if novel_title else f"novel_{wr_id}"
-        from lib.paths import resolve_novel_dir
-        novel_dir = resolve_novel_dir(novel_id_dir)
+        from lib.paths import novel_dir_for, resolve_novel_dir
+        novel_dir = novel_dir_for(novel_title or f"novel_{wr_id}", media_type)
+        if not novel_dir.exists():
+            novel_dir = resolve_novel_dir(novel_id_dir)
         if novel_dir.exists():
             for f in novel_dir.glob("*.json"):
                 if f.name in ("meta.json", "_chapters_index.json"):
@@ -550,7 +593,7 @@ def run_discover(wr_id: int, novel_title: str = "", max_pages: int = 50, source:
     added = 0
     added_items = []
     # 소스 무관 저장된 chapter (index 캐시 기반) — wr_id와 무관하게 재다운로드 방지
-    saved_chapters = _load_saved_chapters(novel_title) if novel_title else set()
+    saved_chapters = _load_saved_chapters(novel_title, media_type) if novel_title else set()
     for ch_wr_id, chapter in all_chapters:
         if ch_wr_id in existing_ids or ch_wr_id in saved_ids:
             continue
@@ -581,8 +624,10 @@ def run_discover(wr_id: int, novel_title: str = "", max_pages: int = 50, source:
     if novel_title:
         try:
             novel_id_dir = novel_title.replace(' ', '_').replace('/', '_')
-            from lib.paths import resolve_novel_dir
-            novel_dir = resolve_novel_dir(novel_id_dir)
+            from lib.paths import novel_dir_for, resolve_novel_dir
+            novel_dir = novel_dir_for(novel_title, media_type)
+            if not novel_dir.exists():
+                novel_dir = resolve_novel_dir(novel_id_dir)
             novel_dir.mkdir(parents=True, exist_ok=True)
             meta_file = novel_dir / 'meta.json'
             meta = {}
@@ -595,6 +640,7 @@ def run_discover(wr_id: int, novel_title: str = "", max_pages: int = 50, source:
             meta['main_wr_id'] = wr_id
             meta['source'] = source
             meta['bo_table'] = bo_table
+            meta['media_type'] = media_type
             meta['title'] = novel_title
             if cover_url:
                 meta['coverUrl'] = cover_url
@@ -631,21 +677,25 @@ def run_collect(limit: int = 0, source_filter: str = "") -> dict:
 _saved_chapters_cache: dict[str, set] = {}
 
 
-def _load_saved_chapters(novel_title: str) -> set:
+def _load_saved_chapters(novel_title: str, media_type: str = "novel") -> set:
     """소설 디렉토리에 이미 저장된 chapter 번호 집합 (source 무관).
 
     어떤 소스(bookto31/toki31)로든 저장됐으면 포함한다. 소스 간 중복
     (같은 chapter를 서로 다른 wr_id로 재발견)을 막기 위한 소스 무관 dedup.
+    media_type: 저장 폴더 결정 ("novel"|"comic"|"webtoon").
 
     _chapters_index.json 캐시를 우선 사용 (save_chapter가 자동 갱신),
     없으면 전체 JSON 스캔으로 폴백.
     """
     novel_id = novel_title.replace(' ', '_').replace('/', '_')
-    if novel_id in _saved_chapters_cache:
-        return _saved_chapters_cache[novel_id]
+    cache_key = f"{media_type}:{novel_id}"
+    if cache_key in _saved_chapters_cache:
+        return _saved_chapters_cache[cache_key]
 
-    from lib.paths import resolve_novel_dir
-    novel_dir = resolve_novel_dir(novel_id)
+    from lib.paths import novel_dir_for, resolve_novel_dir
+    novel_dir = novel_dir_for(novel_title, media_type)
+    if not novel_dir.exists():
+        novel_dir = resolve_novel_dir(novel_id)
     saved: set = set()
 
     # 1) 인덱스 캐시 우선 (빠름 — 파일별 스캔 회피)
@@ -664,7 +714,7 @@ def _load_saved_chapters(novel_title: str) -> set:
                 ch = c.get('chapter')
                 if isinstance(ch, int):
                     saved.add(ch)
-            _saved_chapters_cache[novel_id] = saved
+            _saved_chapters_cache[cache_key] = saved
             return saved
     except Exception:
         pass
@@ -681,14 +731,16 @@ def _load_saved_chapters(novel_title: str) -> set:
                     saved.add(ch)
             except Exception:
                 pass
-    _saved_chapters_cache[novel_id] = saved
+    _saved_chapters_cache[cache_key] = saved
     return saved
 
 
 def _invalidate_saved_chapters(novel_title: str) -> None:
     """저장 후 캐시 무효화 — 다음 collect에서 재스캔하도록."""
     novel_id = novel_title.replace(' ', '_').replace('/', '_')
-    _saved_chapters_cache.pop(novel_id, None)
+    for mt in ("novel", "comic", "webtoon"):
+        _saved_chapters_cache.pop(f"{mt}:{novel_id}", None)
+    _saved_chapters_cache.pop(novel_id, None)  # 하위 호환
 
 
 def _run_collect_locked(limit: int = 0, source_filter: str = "") -> dict:
@@ -764,11 +816,14 @@ def _run_collect_locked(limit: int = 0, source_filter: str = "") -> dict:
 
         log.info(f"[{i+1}/{len(queue)}] wr_id={wr_id} ({novel_title}) source={source} 시도 {item['attempts']}/3")
 
+        from lib.sources import get_media_type
+        media_type = get_media_type(source, item.get('bo_table'))
+
         # 재다운로드 방지: 소스 무관 이미 저장된 chapter면 다운로드 없이 스킵
         # (bookto31/toki31이 같은 chapter를 서로 다른 wr_id로 재발견하는 경우 방지)
         chapter_num = item.get('chapter')
         if chapter_num is not None and novel_title:
-            if chapter_num in _load_saved_chapters(novel_title):
+            if chapter_num in _load_saved_chapters(novel_title, media_type):
                 log.info(
                     f"  ↷ chapter {chapter_num} 이미 저장됨 — 다운로드 스킵 (wr_id={wr_id})"
                 )
@@ -777,8 +832,7 @@ def _run_collect_locked(limit: int = 0, source_filter: str = "") -> dict:
                 continue
 
         # collector 선택 (source별 분기 — collector 키는 sources.json에서 해석)
-        from lib.sources import get_collector, get_media_type
-        media_type = get_media_type(source, item.get('bo_table'))
+        from lib.sources import get_collector
         if media_type in ('comic', 'webtoon'):
             # 이미지 기반 콘텐츠(웹툰/만화)는 전용 이미지 수집기 사용
             collector = _collect_webtoon
@@ -822,8 +876,6 @@ def _run_collect_locked(limit: int = 0, source_filter: str = "") -> dict:
 
         # 저장 (enrich/index 없이 순수 저장)
         chapter_num = item.get('chapter') or chapter_num
-        from lib.sources import get_media_type
-        media_type = get_media_type(source, item.get('bo_table'))
         _save_chapter_only(novel_title, wr_id, body, chapter_num, source, media_type)
         _invalidate_saved_chapters(novel_title)  # 캐시 갱신 — 이후 중복 스킵 정확성
         _body_len = body[1] if isinstance(body, tuple) and len(body) == 2 else body

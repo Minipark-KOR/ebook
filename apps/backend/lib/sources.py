@@ -54,6 +54,11 @@ class SourceConfig(BaseModel):
     collector: str
     discover: str = "unknown"
     speed_hint_sec: int = Field(default=300, ge=1, le=86400)
+    # 적응형 딜레이 상/하한 (초) — 서버 응답시간 × 10 기반으로 이 구간 안에서 동적 조정.
+    # 하한이 없으면 서버가 매우 빨라도 딜레이가 0에 가까워져 부하/차단 위험.
+    # 상한은 속도 상한(hint) 역할. 기본: 하한 5s, 상한 speed_hint_sec.
+    delay_min_sec: int = Field(default=5, ge=1, le=86400)
+    delay_max_sec: int = Field(default=300, ge=1, le=86400)
     # 프록시(유료 트래픽) 사용 여부 — True면 트래픽 가드(일일 한도) 적용.
     # bookto31은 FlareSolverr 로컬(무료), toki31은 DataImpulse/MaskProxy(유료).
     traffic_limited: bool = False
@@ -118,6 +123,18 @@ def get_speed_hint(source: str) -> int:
     """소스의 ETA fallback 속도(초/화)."""
     cfg = load_sources().get(source)
     return cfg.speed_hint_sec if cfg else 300
+
+
+def get_delay_bounds(source: str) -> tuple[int, int]:
+    """적응형 딜레이 상/하한 (min, max) — 서버 응답시간×10을 이 구간에 클램프.
+
+    bookto31(FlareSolverr): 30~300s (서버가 빠르면 30s, 느리면 300s)
+    toki31(IP 회전): 5~30s
+    """
+    cfg = load_sources().get(source)
+    if cfg:
+        return cfg.delay_min_sec, cfg.delay_max_sec
+    return 5, 300
 
 
 def get_traffic_limited(source: str) -> bool:

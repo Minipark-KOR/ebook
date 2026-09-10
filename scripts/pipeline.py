@@ -484,8 +484,15 @@ def run_discover(wr_id: int, novel_title: str = "", max_pages: int = 50, source:
     except Exception:
         pass
     added = 0
+    # 소스 무관 저장된 chapter (index 캐시 기반) — wr_id와 무관하게 재다운로드 방지
+    saved_chapters = _load_saved_chapters(novel_title) if novel_title else set()
     for ch_wr_id, chapter in all_chapters:
         if ch_wr_id in existing_ids or ch_wr_id in saved_ids:
+            continue
+        # chapter 기준 dedup — 같은 chapter가 다른 wr_id로 저장돼 있어도 스킵
+        # (discover와 collect가 동시 진행되며 저장되는 경합 상황 대응)
+        if chapter is not None and chapter in saved_chapters:
+            log.info(f"  ↷ chapter {chapter} 이미 저장됨 — 큐 추가 스킵 (wr_id={ch_wr_id})")
             continue
         queue.append({
             "wr_id": ch_wr_id,
@@ -750,16 +757,17 @@ def _run_collect_locked(limit: int = 0, source_filter: str = "") -> dict:
             touched_novels[novel_title.replace(' ', '_').replace('/', '_')] = novel_title
 
         # 다음 챕터 전 대기 — 소스별 적응형 딜레이 (업계 표준: 10 × fetch 시간)
-        # 속도는 sources.json의 speed_hint_sec 기준: fast(toki31 등) 5~60초, slow(bookto31 등) 300~600초
-        # loop(limit=1)에서도 적용 → 다중 소스를 순서대로 수집해도 소스별 페이싱이 유지된다.
+        # 서버 응답시간 × 10 을 소스별 [delay_min, delay_max] 구간에 클램프:
+        #   서버가 빠르면(fetch 짧음) 딜레이 축소, 느리면 확대 (동적 politeness)
+        #   bookto31: 30~300s / toki31: 5~30s (sources.json delay_min/max)
         if len(queue) > 0:
-            from lib.sources import get_speed_hint
-            hint = get_speed_hint(source)
-            if hint <= 60:
-                delay = max(5.0, min(float(hint), fetch_elapsed * 10))
-            else:
-                delay = max(float(hint), min(float(hint) * 2, fetch_elapsed * 10))
-            log.info(f"  {delay:.0f}초 대기 (fetch {fetch_elapsed:.1f}s × 10, source={source})...")
+            from lib.sources import get_delay_bounds
+            d_min, d_max = get_delay_bounds(source)
+            delay = max(float(d_min), min(float(d_max), fetch_elapsed * 10))
+            log.info(
+                f"  {delay:.0f}초 대기 (fetch {fetch_elapsed:.1f}s × 10, "
+                f"range {d_min}~{d_max}s, source={source})..."
+            )
             time.sleep(delay)
 
         # 일일 한도 도달 시 남은 회차는 다음 날 재개 (현재 회차는 위에서 처리/저장 완료)

@@ -5,6 +5,8 @@
     "collector": "bookto31",
     "discover": "gnuboard",
     "speed_hint_sec": 300,
+    "delay_min_sec": 30,
+    "delay_max_sec": 300,
     "traffic_limited": false
   },
   "toki31": {
@@ -13,6 +15,8 @@
     "collector": "toki31",
     "discover": "toki31_episodes",
     "speed_hint_sec": 5,
+    "delay_min_sec": 5,
+    "delay_max_sec": 30,
     "traffic_limited": true
   }
 }

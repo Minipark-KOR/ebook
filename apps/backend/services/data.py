@@ -7,6 +7,7 @@ import json
 import re
 from pathlib import Path
 from typing import Optional
+from urllib.parse import quote
 
 from lib.paths import (
     normalize_media_type,
@@ -18,6 +19,19 @@ from lib.paths import (
 
 # 인덱스 캐시 파일명
 CHAPTERS_INDEX_FILE = "_chapters_index.json"
+
+# 로컬 표지 디렉토리 — namu.wiki CDN이 데이터센터 IP를 403 차단해 image-proxy(502)가
+# 발생하므로, 로컬에 저장된 표지가 있으면 /api/covers 정적 서빙을 우선 사용한다.
+COVERS_DIR = Path("/opt/ai_data/flaresolverr/covers")
+
+
+def cover_url_for(novel_id: str, fallback: Optional[str] = None) -> Optional[str]:
+    """로컬 표지 파일이 있으면 /api/covers 경로로, 없으면 기존 coverUrl 폴백."""
+    for ext in (".webp", ".jpg", ".jpeg", ".png"):
+        p = COVERS_DIR / f"{novel_id}{ext}"
+        if p.exists():
+            return f"/api/covers/{quote(novel_id + ext)}"
+    return fallback
 
 
 def rebuild_chapters_index(novel_dir: Path) -> list[dict]:
@@ -161,6 +175,8 @@ def get_novel_list(media_type: Optional[str] = None) -> list[dict]:
         mt = normalize_media_type(meta.get("media_type") or folder_type)
         meta["media_type"] = mt
         meta["mediaType"] = mt
+        # 로컬 표지 우선 (namu image-proxy 502 대응)
+        meta["coverUrl"] = cover_url_for(novel_dir.name, meta.get("coverUrl"))
         novels.append(meta)
     return novels
 
@@ -199,6 +215,8 @@ def get_novel_detail(novel_id: str) -> Optional[dict]:
     mt = normalize_media_type(meta.get("media_type") or folder_type)
     meta["media_type"] = mt
     meta["mediaType"] = mt
+    # 로컬 표지 우선 (namu image-proxy 502 대응)
+    meta["coverUrl"] = cover_url_for(novel_dir.name, meta.get("coverUrl"))
     return meta
 
 

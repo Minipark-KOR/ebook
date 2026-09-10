@@ -111,6 +111,35 @@ def parse_chapter_list(html: str, novel_id: int) -> List[Dict]:
     return out
 
 
+def extract_webtoon_images(html: str) -> List[str]:
+    """웹툰 회차 페이지에서 콘텐츠 이미지 URL을 순서대로 추출.
+
+    newto31 등 gnuboard 웹툰 게시판의 본문 이미지는 업로드 CDN
+    (imgspeedtoki 계열)의 <img> (0001_, 0002_, ... 순차)로 제공된다.
+    광고/배너/로고 등은 제외하고 콘텐츠 CDN 이미지만 수집한다.
+    """
+    import re
+
+    urls = []
+    for m in re.finditer(r"<img[^>]+>", html):
+        tag = m.group(0)
+        src_m = re.search(r'src="([^"]+)"', tag)
+        if not src_m:
+            continue
+        url = src_m.group(1)
+        # 콘텐츠 업로드 CDN만 (imgspeedtoki 계열) — newto31.com 로고/배너 제외
+        if re.search(r"https?://[^/\s]*imgspeedtoki\d*\.com", url, re.IGNORECASE):
+            urls.append(url)
+    # 순서 유지 + 중복 제거
+    seen = set()
+    out: List[str] = []
+    for u in urls:
+        if u not in seen:
+            seen.add(u)
+            out.append(u)
+    return out
+
+
 def parse_chapter_body(html: str) -> str:
     """회차 본문 HTML에서 본문 텍스트 추출.
 

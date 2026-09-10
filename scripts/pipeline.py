@@ -159,6 +159,27 @@ def _collect_newtoki(wr_id: int, item: dict) -> tuple[bool, str, str, Optional[i
         return False, "", f"newtoki fetch 실패: {type(e).__name__}: {e}", None
 
 
+def _collect_webtoon(wr_id: int, item: dict) -> tuple[bool, str, str, Optional[int]]:
+    """웹툰 회차 수집: 챕터 이미지 URL을 마크다운 이미지 본문으로 저장.
+
+    본문이 텍스트가 아닌 이미지(웹툰/만화)인 회차용. content를
+    "![n](url)" 행으로 저장하며, 리더는 extract_images_from_content로
+    이미지를 렌더링한다. source/bo_table은 queue item에서 사용.
+    """
+    from services.bookto31 import fetch_chapter, extract_webtoon_images
+    source = item.get('source', 'bookto31')
+    bo_table = item.get('bo_table', 'novel')
+    html = fetch_chapter(wr_id, source=source, bo_table=bo_table)
+    if not html:
+        return False, "", "fetch 실패", None
+    imgs = extract_webtoon_images(html)
+    if not imgs:
+        return False, "", f"콘텐츠 이미지 없음 ({len(html)} bytes)", None
+    body = "\n".join(f"![{i+1}]({u})" for i, u in enumerate(imgs))
+    chapter_num = _extract_chapter_from_html(html)
+    return True, body, "", chapter_num
+
+
 COLLECTORS: dict[str, Callable] = {
     "bookto31": _collect_bookto31,
     "newtoki": _collect_newtoki,
@@ -401,6 +422,7 @@ def run_discover(wr_id: int, novel_title: str = "", max_pages: int = 50, source:
     all_chapters = []
     seen = set()
     title = ""
+    cover_url = ""
 
     # dry_run: 첫 페이지만 fetch해서 제목 추출
     if dry_run:
@@ -439,6 +461,12 @@ def run_discover(wr_id: int, novel_title: str = "", max_pages: int = 50, source:
                     og_m = _re.search(r'<meta property="og:title" content="([^"]+)"', html)
                     if og_m:
                         title = _clean_page_title(og_m.group(1))
+            # 첫 페이지에서 표지(og:image) 추출 (웹툰 등 coverUrl 없음 대비)
+            if page == 1 and not cover_url and html:
+                import re as _re
+                ogi = _re.search(r'<meta property="og:image" content="([^"]+)"', html)
+                if ogi:
+                    cover_url = ogi.group(1).strip()
             if not html or len(html) < 1000:
                 log.info(f"  {page_param}={page}: 응답 없음, 중단")
                 break
@@ -568,6 +596,8 @@ def run_discover(wr_id: int, novel_title: str = "", max_pages: int = 50, source:
             meta['source'] = source
             meta['bo_table'] = bo_table
             meta['title'] = novel_title
+            if cover_url:
+                meta['coverUrl'] = cover_url
             # 소스 기반 연재 상태 갱신 (완결 판정 포함)
             _update_novel_status_from_discover(meta, added, novel_title)
             with open(meta_file, 'w', encoding='utf-8') as f:
@@ -747,8 +777,13 @@ def _run_collect_locked(limit: int = 0, source_filter: str = "") -> dict:
                 continue
 
         # collector 선택 (source별 분기 — collector 키는 sources.json에서 해석)
-        from lib.sources import get_collector
-        collector = COLLECTORS.get(get_collector(source))
+        from lib.sources import get_collector, get_media_type
+        media_type = get_media_type(source, item.get('bo_table'))
+        if media_type in ('comic', 'webtoon'):
+            # 이미지 기반 콘텐츠(웹툰/만화)는 전용 이미지 수집기 사용
+            collector = _collect_webtoon
+        else:
+            collector = COLLECTORS.get(get_collector(source))
         if not collector:
             log.warning(f"  ✗ 알 수 없는 source: {source}")
             errors.append({"wr_id": wr_id, "error": f"Unknown source: {source}"})

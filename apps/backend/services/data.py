@@ -245,11 +245,14 @@ def get_chapter_list(novel_id: str, page: int = 1, limit: int = 20) -> dict:
 
 
 def extract_images_from_content(content: str) -> list[str]:
-    """마크다운 이미지 문법 ![alt](url) 에서 URL 추출"""
+    """마크다운 이미지 문법 ![alt](url) 에서 URL 추출.
+
+    http(s) 절대 URL뿐 아니라 로컬 경로(/api/webtoon_images/...)도 매칭.
+    """
     if not content:
         return []
-    # ![alt](url) 패턴 매칭
-    pattern = r'!\[.*?\]\((https?://[^\s\)]+)\)'
+    # ![alt](url) 패턴 — url은 http(s) 또는 /api/ 로 시작하는 상대 경로
+    pattern = r'!\[.*?\]\((https?://[^\s\)]+|/api/[^\s\)]+)\)'
     return re.findall(pattern, content)
 
 

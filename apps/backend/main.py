@@ -42,6 +42,15 @@ COVERS_DIR = Path("/opt/ai_data/flaresolverr/covers")
 COVERS_DIR.mkdir(parents=True, exist_ok=True)
 app.mount("/api/covers", StaticFiles(directory=str(COVERS_DIR)), name="covers")
 
+# 정적 파일 - 웹툰/만화 챕터 이미지 (로컬 다운로드분)
+WEBTOON_IMAGES_DIR = Path("/opt/ai_data/flaresolverr/webtoon_images")
+WEBTOON_IMAGES_DIR.mkdir(parents=True, exist_ok=True)
+app.mount(
+    "/api/webtoon_images",
+    StaticFiles(directory=str(WEBTOON_IMAGES_DIR)),
+    name="webtoon_images",
+)
+
 # 라우터 등록
 app.include_router(novels.router, prefix="/api", tags=["novels"])
 app.include_router(chapters.router, prefix="/api", tags=["chapters"])

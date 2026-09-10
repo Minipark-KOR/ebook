@@ -90,7 +90,10 @@ export default function ChapterClient({
 
   const paragraphs = chapter.content
     .split("\n")
-    .filter((line) => line.trim());
+    .filter((line) => line.trim())
+    // markdown 이미지 줄(![n](url))은 텍스트로 렌더링하지 않음 — 아래 images 섹션에서 처리.
+    // url은 https 절대 URL 또는 /api/ 로컬 경로 모두 해당.
+    .filter((line) => !/^!\[.*\]\([^\s\)]+\)$/.test(line.trim()));
 
   return (
     <div className="min-h-screen bg-gray-50 dark:bg-gray-900">

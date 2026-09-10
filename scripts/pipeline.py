@@ -159,12 +159,46 @@ def _collect_newtoki(wr_id: int, item: dict) -> tuple[bool, str, str, Optional[i
         return False, "", f"newtoki fetch 실패: {type(e).__name__}: {e}", None
 
 
-def _collect_webtoon(wr_id: int, item: dict) -> tuple[bool, str, str, Optional[int]]:
-    """웹툰 회차 수집: 챕터 이미지 URL을 마크다운 이미지 본문으로 저장.
+def _download_webtoon_images(wr_id: int, urls: list) -> list:
+    """웹툰 챕터 이미지를 로컬로 다운로드 → 로컬/원본 URL 목록 반환.
 
-    본문이 텍스트가 아닌 이미지(웹툰/만화)인 회차용. content를
-    "![n](url)" 행으로 저장하며, 리더는 extract_images_from_content로
-    이미지를 렌더링한다. source/bo_table은 queue item에서 사용.
+    저장: /opt/ai_data/flaresolverr/webtoon_images/{wr_id}/{NNNN}.{ext}
+    다운로드 실패/차단 응답 이미지는 원본 URL을 유지해 회차가 비지 않게 한다.
+    """
+    import urllib.request
+
+    base = Path('/opt/ai_data/flaresolverr/webtoon_images') / str(wr_id)
+    base.mkdir(parents=True, exist_ok=True)
+    out: list = []
+    for i, url in enumerate(urls, 1):
+        ext = Path(url.split('?')[0]).suffix.lower()
+        if ext not in ('.jpg', '.jpeg', '.webp', '.png'):
+            ext = '.jpg'
+        target = base / f"{i:04d}{ext}"
+        if target.exists():
+            out.append(f"/api/webtoon_images/{wr_id}/{target.name}")
+            continue
+        try:
+            req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
+            r = urllib.request.urlopen(req, timeout=20)
+            data = r.read()
+            if len(data) < 1000:  # 차단/에러 페이지 응답 → 원본 유지
+                out.append(url)
+                continue
+            target.write_bytes(data)
+            out.append(f"/api/webtoon_images/{wr_id}/{target.name}")
+        except Exception:
+            out.append(url)
+    return out
+
+
+def _collect_webtoon(wr_id: int, item: dict) -> tuple[bool, str, str, Optional[int]]:
+    """웹툰 회차 수집: 챕터 이미지를 로컬 다운로드 후 markdown 본문으로 저장.
+
+    본문이 텍스트가 아닌 이미지(웹툰/만화)인 회차용. 이미지는
+    webtoon_images/{wr_id}/ 에 저장하고 content는 로컬 경로
+    "![n](/api/webtoon_images/{wr_id}/NNNN.ext)" 행으로 기록한다.
+    source/bo_table은 queue item에서 사용.
     """
     from services.bookto31 import fetch_chapter, extract_webtoon_images
     source = item.get('source', 'bookto31')
@@ -175,7 +209,8 @@ def _collect_webtoon(wr_id: int, item: dict) -> tuple[bool, str, str, Optional[i
     imgs = extract_webtoon_images(html)
     if not imgs:
         return False, "", f"콘텐츠 이미지 없음 ({len(html)} bytes)", None
-    body = "\n".join(f"![{i+1}]({u})" for i, u in enumerate(imgs))
+    local_imgs = _download_webtoon_images(wr_id, imgs)
+    body = "\n".join(f"![{i+1}]({u})" for i, u in enumerate(local_imgs))
     chapter_num = _extract_chapter_from_html(html)
     return True, body, "", chapter_num
 

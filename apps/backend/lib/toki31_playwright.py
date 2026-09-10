@@ -12,8 +12,15 @@ toki31의 anti-bot 보호를 우회하기 위해 Playwright 브라우저를 사�
 - Key: SHA-256(nv_cookie + f":{episode_ref}:{novel_id}:v3")
 - IV: payload 앞 12 bytes
 - Algorithm: AES-128-GCM
+
+데이터 절약:
+- 브라우저/컨텍스트/페이지를 프로세스 수명 동안 재사용 (회차마다 Chromium 재실행 방지
+  → JS 번들·쿠키 재사용, 회차당 다운로드 급감)
+- 불필요 리소스 차단: image/font/media/stylesheet → route.abort() (본문 추출엔 불필요)
+- 프록시 우선순위: MaskProxy($0.87/GB) → DataImpulse($1/GB)
 """
 
+import asyncio
 import base64
 import hashlib
 import json
@@ -30,6 +37,19 @@ logger = logging.getLogger(__name__)
 ENV_LOCAL = os.path.join(os.path.dirname(__file__), '..', '.env.local')
 
 TOKI31_BASE = get_base_url("toki31")
+
+# 프록시 우선순위: MaskProxy(저렴, $0.87/GB) → DataImpulse(백업, $1/GB)
+_PROXY_PRIORITY = ("maskproxy", "dataimpulse")
+_PROXY_DEFAULTS = {
+    "maskproxy": ("MASKPROXY", "gw.maskproxy.io", "1288"),
+    "dataimpulse": ("DATAIMPULSE", "gw.dataimpulse.com", "823"),
+}
+
+# 본문 추출에 불필요한 리소스 → 차단 (트래픽 절약)
+_BLOCKED_RESOURCE_TYPES = ("image", "font", "media", "stylesheet")
+
+# 프록시 인증/연결 실패 시 브라우저 리셋 임계값
+_RESET_AFTER_CONSECUTIVE_FAILURES = 3
 
 
 def _load_proxy_env():
@@ -150,80 +170,162 @@ def extract_text_from_content(content_json: str) -> str:
     return str(data)
 
 
-async def fetch_chapter_content_full(
-    novel_id: str,
-    chapter_id: str,
-    timeout_ms: int = 60000,
-) -> Optional[Tuple[str, str]]:
-    """Playwright로 toki31 챕터 콘텐츠 완전 추출.
+class Toki31Collector:
+    """toki31 챕터 수집기 — 브라우저 재사용 + 리소스 차단.
 
-    ad-ack 처리 + API intercept + AES-GCM 복호화를 순차 진행.
-    novel-content API 응답을 인터셉트하여 복호화한다.
-
-    Returns:
-        (title, content_text) or None on failure
+    브라우저/컨텍스트/페이지를 수명 동안 유지해 JS 번들·쿠키를 재사용한다.
+    (회차마다 Chromium을 새로 띄우면 JS 번들(수백 KB)을 매번 재다운로드)
     """
-    from playwright.async_api import async_playwright
 
-    env = _load_proxy_env()
-    # DataImpulse 우선 (한국 IP targeting 가능), MaskProxy 백업
-    proxy_user = env.get("DATAIMPULSE_USER", "")
-    proxy_pass = env.get("DATAIMPULSE_PASS", "")
-    proxy_host = env.get("DATAIMPULSE_HOST", "gw.dataimpulse.com")
-    proxy_port = env.get("DATAIMPULSE_PORT", "823")
+    def __init__(self):
+        self._playwright = None
+        self._browser = None
+        self._context = None
+        self._page = None
+        self._proxy = None
+        self._content_payload = {}
+        self._response_event = asyncio.Event()
+        self._consecutive_failures = 0
+        self._traffic_total = 0  # 프록시로 받은 총 응답 바이트 (실측, 수명 누적)
+        self._resolve_proxy()
 
-    if not proxy_user or not proxy_pass:
-        # Fallback to MaskProxy
-        proxy_user = env.get("MASKPROXY_USER", "")
-        proxy_pass = env.get("MASKPROXY_PASS", "")
-        proxy_host = env.get("MASKPROXY_HOST", "gw.maskproxy.io")
-        proxy_port = env.get("MASKPROXY_PORT", "1288")
+    # --- 프록시 ---
 
-    if not proxy_user or not proxy_pass:
-        logger.error("Proxy credentials not set in .env.local")
-        return None
+    def _resolve_proxy(self):
+        """프록시 설정 해석 — MaskProxy 우선, DataImpulse 백업."""
+        env = _load_proxy_env()
+        for name in _PROXY_PRIORITY:
+            prefix, default_host, default_port = _PROXY_DEFAULTS[name]
+            user = env.get(f"{prefix}_USER", "")
+            password = env.get(f"{prefix}_PASS", "")
+            host = env.get(f"{prefix}_HOST", default_host)
+            port = env.get(f"{prefix}_PORT", default_port)
+            if not user or not password:
+                continue
+            # 한국 IP targeting (DataImpulse만 지원)
+            if name == "dataimpulse" and "__cr." not in user:
+                user = user + "__cr.kr"
+            self._proxy = {
+                "server": f"http://{host}:{port}",
+                "username": user,
+                "password": password,
+            }
+            logger.info(f"toki31 프록시 선택: {name} ({host}:{port})")
+            return
+        logger.error("toki31 프록시 자격증명 없음 (.env.local)")
 
-    # 한국 IP targeting을 위해 country code 추가
-    if "dataimpulse" in proxy_host and "__cr." not in proxy_user:
-        proxy_user = proxy_user + "__cr.kr"
+    @property
+    def has_proxy(self) -> bool:
+        return bool(self._proxy)
 
-    proxy_url = f"http://{proxy_host}:{proxy_port}"
-    target_url = f"{TOKI31_BASE}/novel/{novel_id}/{chapter_id}"
+    # --- 브라우저 수명 ---
 
-    async with async_playwright() as p:
-        browser = await p.chromium.launch(
-            headless=True,
-            proxy={
-                "server": proxy_url,
-                "username": proxy_user,
-                "password": proxy_pass,
-            },
-        )
-        context = await browser.new_context(
-            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-                       "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+    async def _ensure_started(self) -> None:
+        """브라우저 1회 실행 (재사용). 이미 실행 중이면 no-op."""
+        if self._browser:
+            return
+        from playwright.async_api import async_playwright
+
+        self._playwright = await async_playwright().start()
+        launch_kwargs = {"headless": True}
+        if self._proxy:
+            launch_kwargs["proxy"] = self._proxy
+        self._browser = await self._playwright.chromium.launch(**launch_kwargs)
+        self._context = await self._browser.new_context(
+            user_agent=("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                        "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"),
             viewport={"width": 1920, "height": 1080},
             locale="ko-KR",
         )
-        page = await context.new_page()
+        self._page = await self._context.new_page()
 
-        # novel-content API 응답을 인터셉트 (goto 전에 설정)
-        content_payload = {}
+        # novel-content API 응답 리스너 (브라우저 수명 동안 1회만 등록)
+        self._content_payload = {}
+        self._response_event = asyncio.Event()
 
-        async def on_response(response):
+        async def _on_response(response):
+            # 트래픽 실측: content-length 우선, 없으면 body 크기 (리소스 차단 후
+            # 남는 응답은 HTML/JS/API뿐이라 프록시 과금 바이트의 좋은 근사)
+            try:
+                cl = response.headers.get('content-length')
+                if cl and cl.isdigit():
+                    self._traffic_total += int(cl)
+                else:
+                    self._traffic_total += len(await response.body())
+            except Exception:
+                pass
             if '/api/novel-content' in response.url:
                 try:
                     data = await response.json()
                     if data.get('ok') and data.get('payload'):
-                        content_payload['data'] = data
+                        self._content_payload['data'] = data
+                        self._response_event.set()
                         logger.debug("novel-content response captured")
                 except Exception:
                     pass
 
-        page.on("response", on_response)
+        self._page.on("response", _on_response)
+
+        # 불필요한 리소스 차단 (image/font/media/stylesheet → abort, 트래픽 절약)
+        await self._page.route("**/*", self._block_unnecessary)
+        logger.info("toki31 브라우저 시작 완료 (리소스 차단 + 재사용)")
+
+    async def _block_unnecessary(self, route, request):
+        """불필요한 리소스 차단 — 이미지/폰트/미디어/CSS 차단, JS만 허용."""
+        resource_type = request.resource_type
+        if resource_type in _BLOCKED_RESOURCE_TYPES:
+            await route.abort()
+        else:
+            await route.continue_()
+
+    async def _close_browser(self) -> None:
+        """브라우저 정리 (다음 호출에서 재실행)."""
+        try:
+            if self._browser:
+                await self._browser.close()
+        except Exception:
+            pass
+        try:
+            if self._playwright:
+                await self._playwright.stop()
+        except Exception:
+            pass
+        self._browser = None
+        self._context = None
+        self._page = None
+        self._playwright = None
+        self._content_payload = {}
+        self._response_event = asyncio.Event()
+
+    # --- 챕터 수집 ---
+
+    async def collect_chapter(
+        self,
+        novel_id: str,
+        chapter_id: str,
+        timeout_ms: int = 60000,
+    ) -> Optional[Tuple[str, str]]:
+        """단일 챕터 본문 수집.
+
+        Returns:
+            (title, content_text) or None on failure
+        """
+        if not self._proxy:
+            logger.error("toki31 프록시 자격증명 없음 — 수집 불가")
+            return None
+
+        await self._ensure_started()
+        page = self._page
+
+        # 이벤트 초기화 (이전 회차 응답 무시)
+        self._response_event.clear()
+        self._content_payload.clear()
+
+        target_url = f"{TOKI31_BASE}/novel/{novel_id}/{chapter_id}"
 
         # 페이지 로드 (재시도 포함)
         loaded = False
+        fatal_proxy_error = False
         for attempt in range(3):
             try:
                 resp = await page.goto(target_url, wait_until="domcontentloaded", timeout=timeout_ms)
@@ -231,14 +333,28 @@ async def fetch_chapter_content_full(
                     loaded = True
                     break
             except Exception as e:
-                logger.warning(f"Page load attempt {attempt + 1} failed: {e}")
+                msg = str(e)
+                logger.warning(f"Page load attempt {attempt + 1} failed: {msg}")
+                if any(k in msg for k in ("ERR_PROXY", "PROXY_AUTH", "proxy authentication")):
+                    # 프록시 인증/연결 문제 → 브라우저 리셋 필요
+                    fatal_proxy_error = True
+                    break
                 if attempt < 2:
                     await page.wait_for_timeout(3000)
 
         if not loaded:
             logger.error(f"Failed to load {target_url} after 3 attempts")
-            await browser.close()
+            if fatal_proxy_error:
+                self._consecutive_failures += 1
+                if self._consecutive_failures >= _RESET_AFTER_CONSECUTIVE_FAILURES:
+                    logger.warning("프록시 연속 실패 — 브라우저 리셋")
+                    await self._close_browser()
+                    self._consecutive_failures = 0
+            else:
+                self._consecutive_failures = 0
             return None
+
+        self._consecutive_failures = 0
 
         # 제목 추출 (페이지 타이틀)
         title_text = await page.title()
@@ -247,19 +363,19 @@ async def fetch_chapter_content_full(
             if len(parts) >= 2:
                 title_text = parts[1].split('|')[0].strip()
 
-        # novel-content API 응답 대기 (ad-ack 완료 후 브라우저가 자동 호출)
-        for _ in range(25):
-            if content_payload.get('data'):
-                break
-            await page.wait_for_timeout(1000)
+        # novel-content API 응답 대기 (ad-ack 완료 후 브라우저가 자동 호출, 최대 25s)
+        if not self._content_payload.get('data'):
+            try:
+                await asyncio.wait_for(self._response_event.wait(), timeout=25)
+            except asyncio.TimeoutError:
+                pass
 
-        if not content_payload.get('data'):
+        if not self._content_payload.get('data'):
             logger.error("novel-content API response not received within 25s")
-            await browser.close()
             return None
 
         # nv 쿠키 추출
-        cookies = await context.cookies()
+        cookies = await self._context.cookies()
         nv_cookie = ""
         for c in cookies:
             if c['name'] == 'nv':
@@ -268,13 +384,11 @@ async def fetch_chapter_content_full(
 
         if not nv_cookie:
             logger.error("nv cookie not found")
-            await browser.close()
             return None
 
-        payload = content_payload['data'].get('payload', '')
+        payload = self._content_payload['data'].get('payload', '')
         if not payload:
             logger.error("Empty payload from novel-content")
-            await browser.close()
             return None
 
         # 복호화
@@ -284,13 +398,57 @@ async def fetch_chapter_content_full(
             content_text = extract_text_from_content(decrypted)
         except Exception as e:
             logger.error(f"Decryption failed: {e}")
-            await browser.close()
             return None
 
-        await browser.close()
+        if not content_text or len(content_text) < 50:
+            logger.error(f"Failed to extract content from {target_url}")
+            return None
 
-    if not content_text or len(content_text) < 50:
-        logger.error(f"Failed to extract content from {target_url}")
+        return (title_text, content_text.strip())
+
+
+# 모듈 수준 싱글턴 — 프로세스 수명 동안 브라우저 재사용 (데이터 절약)
+_collector: Optional[Toki31Collector] = None
+_collector_loop: Optional[asyncio.AbstractEventLoop] = None
+
+
+def get_traffic_total_bytes() -> int:
+    """프로세스 수명 동안 프록시로 다운로드한 총 바이트 (실측 누적).
+
+    pipeline의 트래픽 가드가 collect 전후 delta를 계산해 일일 한도에 반영한다.
+    """
+    return _collector._traffic_total if _collector else 0
+
+
+def fetch_chapter_content_full(
+    novel_id: str,
+    chapter_id: str,
+    timeout_ms: int = 60000,
+) -> Optional[Tuple[str, str]]:
+    """toki31 챕터 콘텐츠 완전 추출 (동기 인터페이스, 브라우저 재사용).
+
+    모듈 싱글턴 Toki31Collector를 고정 이벤트 루프에서 재사용한다.
+    (호출마다 이벤트 루프/브라우저를 새로 만들지 않음)
+
+    Returns:
+        (title, content_text) or None on failure
+    """
+    global _collector, _collector_loop
+
+    if _collector is None:
+        _collector = Toki31Collector()
+
+    if not _collector.has_proxy:
+        logger.error("toki31 프록시 자격증명 없음 (.env.local)")
         return None
 
-    return (title_text, content_text.strip())
+    if _collector_loop is None or _collector_loop.is_closed():
+        _collector_loop = asyncio.new_event_loop()
+
+    try:
+        return _collector_loop.run_until_complete(
+            _collector.collect_chapter(novel_id, chapter_id, timeout_ms)
+        )
+    except Exception as e:
+        logger.error(f"toki31 collect 실패: {type(e).__name__}: {e}")
+        return None

@@ -20,7 +20,6 @@ import os
 import sys
 import time
 import logging
-import asyncio
 import threading
 from datetime import datetime, timezone
 from pathlib import Path
@@ -136,20 +135,22 @@ def _collect_bookto31(wr_id: int, item: dict) -> tuple[bool, str, str, Optional[
 
 
 def _collect_newtoki(wr_id: int, item: dict) -> tuple[bool, str, str, Optional[int]]:
-    """newtoki 수집기: Playwright + DataImpulse + AES-GCM 복호화."""
+    """newtoki 수집기: Playwright + 프록시(MaskProxy 우선) + AES-GCM 복호화.
+
+    fetch_chapter_content_full는 내부에서 브라우저를 재사용하므로
+    여기서 이벤트 루프를 직접 관리하지 않는다.
+    """
     from lib.toki31_playwright import fetch_chapter_content_full
     novel_id = item.get('novel_ref', '')
     if not novel_id:
         return False, "", "novel_ref 필요 (newtoki는 novel_id+episode_id 필요)", None
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
     try:
-        result = loop.run_until_complete(fetch_chapter_content_full(novel_id, wr_id))
+        result = fetch_chapter_content_full(novel_id, wr_id)
+        if not result:
+            return False, "", "newtoki fetch 실패 (결과 없음)", None
         return True, result, "", None
     except Exception as e:
-        return False, "", f"newtoki fetch 실패: {e}", None
-    finally:
-        loop.close()
+        return False, "", f"newtoki fetch 실패: {type(e).__name__}: {e}", None
 
 
 COLLECTORS: dict[str, Callable] = {
@@ -204,10 +205,11 @@ def discover_toki31(novel_id: int, novel_title: str = "", dry_run: bool = False)
 
     def _fetch_episodes(only_title: bool = False):
         env = _load_proxy_env()
-        proxy_user = env.get("DATAIMPULSE_USER", "") or env.get("MASKPROXY_USER", "")
-        proxy_pass = env.get("DATAIMPULSE_PASS", "") or env.get("MASKPROXY_PASS", "")
-        proxy_host = env.get("DATAIMPULSE_HOST", "") or env.get("MASKPROXY_HOST", "")
-        proxy_port = env.get("DATAIMPULSE_PORT", "") or env.get("MASKPROXY_PORT", "")
+        # 프록시 우선순위: MaskProxy(저렴) → DataImpulse(백업)
+        proxy_user = env.get("MASKPROXY_USER", "") or env.get("DATAIMPULSE_USER", "")
+        proxy_pass = env.get("MASKPROXY_PASS", "") or env.get("DATAIMPULSE_PASS", "")
+        proxy_host = env.get("MASKPROXY_HOST", "") or env.get("DATAIMPULSE_HOST", "")
+        proxy_port = env.get("MASKPROXY_PORT", "") or env.get("DATAIMPULSE_PORT", "")
         if "dataimpulse" in proxy_host and "__cr." not in proxy_user:
             proxy_user = proxy_user + "__cr.kr"
         if not proxy_user or not proxy_pass:
@@ -222,6 +224,13 @@ def discover_toki31(novel_id: int, novel_title: str = "", dry_run: bool = False)
                     proxy={"server": proxy_url, "username": proxy_user, "password": proxy_pass})
                 c = await b.new_context(user_agent=UA, locale="ko-KR")
                 pg = await c.new_page()
+                # 불필요한 리소스 차단 (이미지/폰트/미디어/CSS → 트래픽 절약)
+                async def _block(route, request):
+                    if request.resource_type in ("image", "font", "media", "stylesheet"):
+                        await route.abort()
+                    else:
+                        await route.continue_()
+                await pg.route("**/*", _block)
                 await pg.goto("{}/novel/{}".format(TOKI31_BASE, novel_id), wait_until="domcontentloaded", timeout=60000)
                 await pg.wait_for_timeout(2500)
                 title = (await pg.title()).split("|")[0].strip()
@@ -536,7 +545,23 @@ def run_collect(limit: int = 0, source_filter: str = "") -> dict:
 
 
 def _run_collect_locked(limit: int = 0, source_filter: str = "") -> dict:
-    """run_collect 본체 (락 보유 상태에서 실행)."""
+    """run_collect 본체 (락 보유 상태에서 실행).
+
+    트래픽 가드: 일일 한도 초과 시 회차를 처리하지 않고 즉시 반환한다.
+    (loop는 다음 날 자정에 자동 재개 — queue는 보존)
+    """
+    from lib.traffic_guard import reset_if_new_day, is_exceeded, add_bytes, summary
+    from lib.toki31_playwright import get_traffic_total_bytes
+
+    reset_if_new_day()
+    if is_exceeded():
+        s = summary()
+        log.warning(
+            f"  ⏸ 일일 트래픽 한도 초과 ({s['used_mb']}MB/{s['daily_limit_mb']}MB) "
+            f"— 자정까지 수집 중단 (queue {len(_load_queue())}건 보존)"
+        )
+        return {"processed": 0, "errors": [], "remaining": len(_load_queue()), "traffic_exceeded": True}
+
     full_queue = _load_queue()
     if not full_queue:
         return {"processed": 0, "errors": [], "remaining": 0}
@@ -593,6 +618,8 @@ def _run_collect_locked(limit: int = 0, source_filter: str = "") -> dict:
             continue
 
         # 3회 재시도 (fetch 시간 측정 → 적응형 딜레이)
+        # 트래픽 실측: collect 전후 프록시 누적 바이트 delta를 일일 한도에 반영
+        traffic_before = get_traffic_total_bytes()
         success, body, error_msg, chapter_num = False, "", "", None
         fetch_elapsed = 0.0
         _t0 = time.monotonic()
@@ -606,6 +633,9 @@ def _run_collect_locked(limit: int = 0, source_filter: str = "") -> dict:
                 log.warning(f"  fetch 실패 ({attempt+1}/3): {error_msg}")
                 time.sleep(2)
         fetch_elapsed = time.monotonic() - _t0
+        traffic_delta = get_traffic_total_bytes() - traffic_before
+        if traffic_delta > 0:
+            add_bytes(traffic_delta, chapter=True)
 
         if not success:
             item['last_error'] = f"3회 시도 후 실패 (body={len(body) if body else 0})"
@@ -641,6 +671,15 @@ def _run_collect_locked(limit: int = 0, source_filter: str = "") -> dict:
                 delay = max(float(hint), min(float(hint) * 2, fetch_elapsed * 10))
             log.info(f"  {delay:.0f}초 대기 (fetch {fetch_elapsed:.1f}s × 10, source={source})...")
             time.sleep(delay)
+
+        # 일일 한도 도달 시 남은 회차는 다음 날 재개 (현재 회차는 위에서 처리/저장 완료)
+        if is_exceeded():
+            s = summary()
+            log.warning(
+                f"  ⏸ 일일 트래픽 한도 도달 ({s['used_mb']}MB/{s['daily_limit_mb']}MB) "
+                f"— 남은 {len(queue) - i - 1}건은 자정 이후 재개"
+            )
+            break
 
     # 전체 queue에서 처리/실패 제거된 항목만 제거하고 저장
     remaining_queue = [q for q in full_queue if q['wr_id'] not in removed_ids]
@@ -1049,6 +1088,19 @@ def main():
 
     cmd = sys.argv[1]
 
+    if cmd == "traffic":
+        """일일 트래픽 사용량/한도 상태 출력."""
+        from lib.traffic_guard import summary, reset_if_new_day, seconds_until_next_day
+        reset_if_new_day()
+        s = summary()
+        print(f"일일 한도:   {s['daily_limit_mb']} MB")
+        print(f"사용량:      {s['used_mb']} MB ({s['chapters']}회차)")
+        print(f"잔여:        {s['remaining_mb']} MB")
+        print(f"한도 초과:   {'예' if s['exceeded'] else '아니오'}")
+        if s['exceeded']:
+            print(f"자정 재개까지: {seconds_until_next_day()}초")
+        return 0
+
     if cmd == "discover":
         if len(sys.argv) < 3:
             print("사용법: pipeline.py discover <wr_id> [novel_title] [max_pages] [--source bookto31|newtoki] [--dry-run]")
@@ -1168,6 +1220,20 @@ def main():
 
                 # collect (1개씩, 모든 소스 처리 — 다중 소스)
                 result = run_collect(limit=1)
+
+                # 일일 트래픽 한도 초과 → 자정까지 대기 후 자동 재개
+                if result.get('traffic_exceeded'):
+                    from lib.traffic_guard import seconds_until_next_day, summary
+                    _s = summary()
+                    wait = seconds_until_next_day()
+                    log.warning(
+                        f"⏸ 일일 한도 도달 ({_s['used_mb']}MB/{_s['daily_limit_mb']}MB) "
+                        f"— {wait}초(자정) 후 재개"
+                    )
+                    _write_status({"phase": "paused_traffic", "resume_in_sec": wait})
+                    time.sleep(wait)
+                    continue
+
                 if result['processed'] == 0 and result['remaining'] == 0:
                     # 연재작: queue가 비어도 계속 대기 (새 회차 추가 대기)
                     log.info("큐 비어 있음 - 새 회차 대기 중")

@@ -2,7 +2,30 @@
 
 > ebooklib의 모든 주요 변경 사항. 최신이 위.
 
-## 2026-09-09 (최신)
+## 2026-09-10 (최신)
+
+### 트래픽 절약 + 안전장치 (DataImpulse 소진 대응)
+- **문제**: toki31 수집이 회차마다 Chromium 새로 실행 + 이미지/폰트/CSS 전부 다운로드
+  → 회차당 수 MB × 큐 2,031건 = DataImpulse 5GB 순식간 소진
+- **`lib/toki31_playwright.py` 리팩터**:
+  - `Toki31Collector` 클래스 — 브라우저/컨텍스트/페이지 프로세스 수명 동안 **재사용**
+    (JS 번들·쿠키 재사용 → 회차당 ~430KB, 옛 collector 패턴 복원)
+  - `page.route()`로 **image/font/media/stylesheet 차단** (`route.abort()`)
+  - **프록시 우선순위 전환**: MaskProxy($0.87/GB) → DataImpulse($1/GB) (설계 문서대로)
+  - 응답 바이트 실측 누적 (`get_traffic_total_bytes()`)
+  - 프록시 인증 연속 실패 시 브라우저 리셋
+- **`lib/traffic_guard.py` 신규**: 일일 트래픽 한도 가드
+  - 다운로드 바이트 실측 누적 (state 파일: `traffic_state.json`)
+  - 일일 한도 `EBOOK_DAILY_TRAFFIC_LIMIT_MB` (기본 200MB) 초과 시 수집 일시정지
+  - 날짜 변경 시 자동 리셋 → 다음 날 자정에 자동 재개
+  - `pipeline.py traffic` 상태 조회 명령
+- **`pipeline.py`**:
+  - `_collect_newtoki` None 반환 시 `(False, ...)` → **TypeError 크래시 루프 해결**
+  - `run_collect`: 한도 초과 시 조기 반환(`traffic_exceeded`) + 회차별 트래픽 누적
+  - `loop`: 한도 초과 시 자정까지 대기 후 재개 (queue 보존)
+  - `discover_toki31`: 프록시 MaskProxy 우선 + 리소스 차단
+
+## 2026-09-09
 
 ### 다중 소스 아키텍처 버그 수정
 - **toki31 수집 속도 회복**: speed_hint 30→5초 (IP 회전으로 30초는 과보수), 루프 사이클 대기 5→1초

@@ -554,6 +554,9 @@ def _load_saved_chapters(novel_title: str) -> set:
 
     어떤 소스(bookto31/toki31)로든 저장됐으면 포함한다. 소스 간 중복
     (같은 chapter를 서로 다른 wr_id로 재발견)을 막기 위한 소스 무관 dedup.
+
+    _chapters_index.json 캐시를 우선 사용 (save_chapter가 자동 갱신),
+    없으면 전체 JSON 스캔으로 폴백.
     """
     novel_id = novel_title.replace(' ', '_').replace('/', '_')
     if novel_id in _saved_chapters_cache:
@@ -561,6 +564,29 @@ def _load_saved_chapters(novel_title: str) -> set:
 
     novel_dir = Path('/opt/ai_data/flaresolverr/novels') / novel_id
     saved: set = set()
+
+    # 1) 인덱스 캐시 우선 (빠름 — 파일별 스캔 회피)
+    #    인덱스 chapter 수와 실제 챕터 파일 수가 같을 때만 신뢰 (부분/오래된 인덱스 방지)
+    try:
+        from services.data import load_chapters_index
+        idx = load_chapters_index(novel_dir) or []
+        file_count = 0
+        if novel_dir.exists():
+            file_count = sum(
+                1 for f in novel_dir.glob("*.json")
+                if f.name not in ("meta.json", "_chapters_index.json")
+            )
+        if idx and len(idx) == file_count:
+            for c in idx:
+                ch = c.get('chapter')
+                if isinstance(ch, int):
+                    saved.add(ch)
+            _saved_chapters_cache[novel_id] = saved
+            return saved
+    except Exception:
+        pass
+
+    # 2) 폴백: 전체 JSON 스캔
     if novel_dir.exists():
         for f in novel_dir.glob("*.json"):
             if f.name in ("meta.json", "_chapters_index.json"):
@@ -615,6 +641,7 @@ def _run_collect_locked(limit: int = 0, source_filter: str = "") -> dict:
 
     processed = 0
     errors = []
+    dedup_skipped = 0
     max_run = limit if limit > 0 else len(queue)
     total = len(queue)
     # 처리/제거된 wr_id 추적 (전체 queue에서 제거)

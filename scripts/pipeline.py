@@ -303,13 +303,14 @@ def discover_toki31(novel_id: int, novel_title: str = "", dry_run: bool = False)
                 pass
 
     added = 0
+    added_items = []
     for ep, epid in eps.items():
         e = int(ep)
         if e in saved:
             continue
         if int(epid) in existing_ids:
             continue
-        queue.append({
+        item = {
             "wr_id": int(epid),
             "episode_id": int(epid),
             "novel_title": title or novel_title,
@@ -320,10 +321,12 @@ def discover_toki31(novel_id: int, novel_title: str = "", dry_run: bool = False)
             "added_at": datetime.now(timezone.utc).isoformat(),
             "attempts": 0,
             "last_error": None,
-        })
+        }
+        queue.append(item)
+        added_items.append(item)
         existing_ids.add(int(epid))
         added += 1
-    _save_queue(queue)
+    _merge_into_queue(add_items=added_items)
 
     # meta 기록
     try:
@@ -506,6 +509,7 @@ def run_discover(wr_id: int, novel_title: str = "", max_pages: int = 50, source:
     except Exception:
         pass
     added = 0
+    added_items = []
     # 소스 무관 저장된 chapter (index 캐시 기반) — wr_id와 무관하게 재다운로드 방지
     saved_chapters = _load_saved_chapters(novel_title) if novel_title else set()
     for ch_wr_id, chapter in all_chapters:
@@ -516,7 +520,7 @@ def run_discover(wr_id: int, novel_title: str = "", max_pages: int = 50, source:
         if chapter is not None and chapter in saved_chapters:
             log.info(f"  ↷ chapter {chapter} 이미 저장됨 — 큐 추가 스킵 (wr_id={ch_wr_id})")
             continue
-        queue.append({
+        item = {
             "wr_id": ch_wr_id,
             "novel_title": novel_title,
             "chapter": chapter,
@@ -525,11 +529,13 @@ def run_discover(wr_id: int, novel_title: str = "", max_pages: int = 50, source:
             "added_at": datetime.now(timezone.utc).isoformat(),
             "attempts": 0,
             "last_error": None,
-        })
+        }
+        queue.append(item)
+        added_items.append(item)
         existing_ids.add(ch_wr_id)
         added += 1
 
-    _save_queue(queue)
+    _merge_into_queue(add_items=added_items)
 
     # 작품 메인 wr_id 기록 (loop의 자동 discover를 위해 meta.json에 저장)
     if novel_title:
@@ -803,9 +809,10 @@ def _run_collect_locked(limit: int = 0, source_filter: str = "") -> dict:
             )
             break
 
-    # 전체 queue에서 처리/실패 제거된 항목만 제거하고 저장
+    # 전체 queue에서 처리/실패 제거된 항목만 제거하고 저장.
+    # 동시에 실행된 discover가 추가한 항목을 보존하기 위해 디스크 최신 상태에 델타 적용.
     remaining_queue = [q for q in full_queue if q['wr_id'] not in removed_ids]
-    _save_queue(remaining_queue)
+    _merge_into_queue(remove_ids=removed_ids)
     log.info(f"collect 완료: {processed}개 처리, {len(remaining_queue)}개 남음")
 
     # EPUB 제작/재제작 — 이번에 queue가 비워진(전체 회차 수집 완료) 소설만
@@ -1045,6 +1052,46 @@ def _save_queue(queue: list) -> None:
         tmp_path = QUEUE_FILE.with_suffix(f'.tmp.{os.getpid()}.{_threading.get_ident()}')
         with open(tmp_path, 'w') as f:
             json.dump(queue, f, ensure_ascii=False, indent=2)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp_path, QUEUE_FILE)  # atomic rename
+    finally:
+        fcntl.flock(lockf, fcntl.LOCK_UN)
+
+
+def _merge_into_queue(add_items: Optional[list] = None, remove_ids: Optional[set] = None) -> None:
+    """디스크 큐 최신 상태에 델타를 적용해 원자적으로 저장.
+
+    collect 루프와 discover(관리자 서브프로세스 등)가 같은 queue.json을
+    읽고 쓰는 read-modify-write 경합을 방지한다. _load_queue→_save_queue가
+    개별적으로만 락을 잡아 한쪽의 추가/제거가 다른 쪽의 저장에 덮이는
+    버그를, 읽기~쓰기 동안 queue.lock EX를 유지해 해결한다.
+
+    Args:
+        add_items: 이번 호출에서 새로 추가할 큐 항목 (wr_id 기준 dedup, 신규 우선)
+        remove_ids: 이번 호출에서 처리/제거된 wr_id 집합
+    """
+    import fcntl
+    import threading as _threading
+    add_items = add_items or []
+    remove_ids = remove_ids or set()
+    lockf = _queue_lock()
+    fcntl.flock(lockf, fcntl.LOCK_EX)
+    try:
+        try:
+            with open(QUEUE_FILE, encoding='utf-8') as f:
+                current = json.load(f)
+        except (json.JSONDecodeError, OSError):
+            current = []
+        by_id: dict = {}
+        for it in current:
+            if it.get('wr_id') not in remove_ids:
+                by_id[it['wr_id']] = it
+        for it in add_items:
+            by_id[it['wr_id']] = it
+        tmp_path = QUEUE_FILE.with_suffix(f'.tmp.{os.getpid()}.{_threading.get_ident()}')
+        with open(tmp_path, 'w') as f:
+            json.dump(list(by_id.values()), f, ensure_ascii=False, indent=2)
             f.flush()
             os.fsync(f.fileno())
         os.replace(tmp_path, QUEUE_FILE)  # atomic rename

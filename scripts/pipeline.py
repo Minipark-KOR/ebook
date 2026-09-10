@@ -283,7 +283,8 @@ def discover_toki31(novel_id: int, novel_title: str = "", dry_run: bool = False)
     queue = _load_queue()
     existing_ids = {item['wr_id'] for item in queue}
     novel_id_dir = (title or novel_title).replace(' ', '_').replace('/', '_') if (title or novel_title) else f"novel_{novel_id}"
-    novel_dir = Path('/opt/ai_data/flaresolverr/novels') / novel_id_dir
+    from lib.storage import NOVELS_DIR
+    novel_dir = NOVELS_DIR / novel_id_dir
     saved = set()
     if novel_dir.exists():
         for f in novel_dir.glob("*.json"):
@@ -439,7 +440,8 @@ def run_discover(wr_id: int, novel_title: str = "", max_pages: int = 50, source:
     # 저장된 챕터에서 유효한 wr_id를 뽑아 재시도. (에피소드 셀렉트가 0개 나옴)
     if not all_chapters and not dry_run:
         novel_id_dir = novel_title.replace(' ', '_').replace('/', '_') if novel_title else f"novel_{wr_id}"
-        novel_dir = Path('/opt/ai_data/flaresolverr/novels') / novel_id_dir
+        from lib.storage import NOVELS_DIR
+        novel_dir = NOVELS_DIR / novel_id_dir
         saved_wr = None
         if novel_dir.exists():
             for f in sorted(novel_dir.glob("*.json"), key=lambda p: int(p.stem)):
@@ -469,7 +471,8 @@ def run_discover(wr_id: int, novel_title: str = "", max_pages: int = 50, source:
     saved_ids = set()
     try:
         novel_id_dir = novel_title.replace(' ', '_').replace('/', '_') if novel_title else f"novel_{wr_id}"
-        novel_dir = Path('/opt/ai_data/flaresolverr/novels') / novel_id_dir
+        from lib.storage import NOVELS_DIR
+        novel_dir = NOVELS_DIR / novel_id_dir
         if novel_dir.exists():
             for f in novel_dir.glob("*.json"):
                 if f.name in ("meta.json", "_chapters_index.json"):
@@ -503,7 +506,8 @@ def run_discover(wr_id: int, novel_title: str = "", max_pages: int = 50, source:
     if novel_title:
         try:
             novel_id_dir = novel_title.replace(' ', '_').replace('/', '_')
-            novel_dir = Path('/opt/ai_data/flaresolverr/novels') / novel_id_dir
+            from lib.storage import NOVELS_DIR
+            novel_dir = NOVELS_DIR / novel_id_dir
             novel_dir.mkdir(parents=True, exist_ok=True)
             meta_file = novel_dir / 'meta.json'
             meta = {}
@@ -562,7 +566,8 @@ def _load_saved_chapters(novel_title: str) -> set:
     if novel_id in _saved_chapters_cache:
         return _saved_chapters_cache[novel_id]
 
-    novel_dir = Path('/opt/ai_data/flaresolverr/novels') / novel_id
+    from lib.storage import NOVELS_DIR
+    novel_dir = NOVELS_DIR / novel_id
     saved: set = set()
 
     # 1) 인덱스 캐시 우선 (빠름 — 파일별 스캔 회피)
@@ -683,6 +688,7 @@ def _run_collect_locked(limit: int = 0, source_filter: str = "") -> dict:
                     f"  ↷ chapter {chapter_num} 이미 저장됨 — 다운로드 스킵 (wr_id={wr_id})"
                 )
                 removed_ids.add(wr_id)
+                dedup_skipped += 1
                 continue
 
         # collector 선택 (source별 분기)
@@ -773,9 +779,15 @@ def _run_collect_locked(limit: int = 0, source_filter: str = "") -> dict:
         "total": total,
         "remaining": len(remaining_queue),
         "processed": processed,
-        "last_result": {"processed": processed, "errors": len(errors), "remaining": len(remaining_queue)},
+        "dedup_skipped": dedup_skipped,
+        "last_result": {
+            "processed": processed,
+            "errors": len(errors),
+            "remaining": len(remaining_queue),
+            "dedup_skipped": dedup_skipped,
+        },
     })
-    return {"processed": processed, "errors": errors, "remaining": len(remaining_queue)}
+    return {"processed": processed, "errors": errors, "remaining": len(remaining_queue), "dedup_skipped": dedup_skipped}
 
 
 # === 3단계: ENRICH — namu.wiki 메타데이터 보강 ===
@@ -1176,6 +1188,14 @@ def main():
         print(f"한도 초과:   {'예' if s['exceeded'] else '아니오'}")
         if s['exceeded']:
             print(f"자정 재개까지: {seconds_until_next_day()}초")
+        # dedup 스킵 통계 (재다운로드 방지 실적)
+        try:
+            st = json.load(open(STATUS_FILE, encoding='utf-8'))
+            lr = st.get('last_result') or {}
+            if lr.get('dedup_skipped') is not None:
+                print(f"마지막 collect dedup 스킵: {lr['dedup_skipped']}건")
+        except Exception:
+            pass
         return 0
 
     if cmd == "discover":

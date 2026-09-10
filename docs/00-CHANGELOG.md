@@ -28,6 +28,9 @@
   - bookto31(gnuboard wr_id) / toki31(episode_id)가 **같은 chapter를 서로 다른 ID로
     재발견하는 소스 간 중복**을 chapter 번호 기준으로 차단
   - 소설별 저장 chapter 캐시 + 저장 후 무효화 (`_load_saved_chapters`/`_invalidate_saved_chapters`)
+  - **`_chapters_index.json` 캐시 재사용** (Scrapy RFPDupeFilter 영속화 대응 — 파일 수
+    일치 시 인덱스로 빠르게 로드, 불일치 시 전체 스캔 폴백)
+  - **dedup 스킵 카운트 메트릭**: collect 결과/`traffic`에 노출 (Scrapy `dupefilter/filtered` 대응)
 - **`pipeline.py`**:
   - `_collect_newtoki` None 반환 시 `(False, ...)` → **TypeError 크래시 루프 해결**
   - `run_collect`: 한도 초과 시 조기 반환(`traffic_exceeded`) + 회차별 트래픽 누적

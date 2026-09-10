@@ -386,7 +386,7 @@ async def start_pipeline(req: StartPipelineRequest):
     if not source or not novel_id:
         raise HTTPException(
             status_code=400,
-            detail="지원하지 않는 URL 형식입니다. bookto31.com 또는 toki31.com URL이어야 합니다.",
+            detail="지원하지 않는 URL 형식입니다. sources.json에 등록된 도메인(예: bookto31.com, newto31.com) URL이어야 합니다.",
         )
 
     # 3. 중복 시작 방지

@@ -23,6 +23,13 @@ from lib.paths import (
 
 COVERS_DIR = Path("/opt/ai_data/flaresolverr/covers")
 
+# 수집 소스 → 출판사 표기 매핑
+SOURCE_PUBLISHERS = {
+    "bookto31": "북토끼",
+    "newto31": "뉴토끼",
+    "toki31": "뉴토끼",
+}
+
 
 def get_novel_dir(novel_title: str, media_type: str = DEFAULT_MEDIA_TYPE) -> Path:
     """소설명 + media_type → 디렉토리 경로 (존재 여부 무관)."""
@@ -108,7 +115,7 @@ def save_chapter(
         return False
 
     # meta.json 갱신
-    _update_meta(novel_dir, novel_id, novel_title, media_type)
+    _update_meta(novel_dir, novel_id, novel_title, media_type, source)
 
     # 챕터 인덱스 캐시 갱신 (API 성능 최적화)
     try:
@@ -125,9 +132,11 @@ def _update_meta(
     novel_id: str,
     novel_title: str,
     media_type: str = DEFAULT_MEDIA_TYPE,
+    source: str = "bookto31",
 ) -> None:
     """meta.json 생성/업데이트."""
     media_type = normalize_media_type(media_type)
+    publisher = SOURCE_PUBLISHERS.get(source, "북토끼")
     meta_file = novel_dir / "meta.json"
 
     try:
@@ -141,7 +150,7 @@ def _update_meta(
                 "description": "",
                 "genre": [],
                 "status": "unknown",
-                "publisher": "북토끼",
+                "publisher": publisher,
                 "namuUrl": None,
                 "media_type": media_type,
             }
@@ -153,6 +162,10 @@ def _update_meta(
             changed = False
             if meta.get("media_type") != media_type:
                 meta["media_type"] = media_type
+                changed = True
+            # publisher가 기본값(북토끼)이면 소스 기준으로 갱신 (namu 보강본은 유지)
+            if meta.get("publisher") in (None, "북토끼") and publisher != "북토끼":
+                meta["publisher"] = publisher
                 changed = True
             chapter_files = list(novel_dir.glob("*.json"))
             chapter_count = sum(1 for f in chapter_files if f.stem.isdigit())

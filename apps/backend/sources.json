@@ -18,5 +18,15 @@
     "delay_min_sec": 5,
     "delay_max_sec": 30,
     "traffic_limited": true
+  },
+  "newto31": {
+    "domains": ["newto31.com"],
+    "base_url": "https://newto31.com",
+    "collector": "bookto31",
+    "discover": "gnuboard",
+    "speed_hint_sec": 300,
+    "delay_min_sec": 30,
+    "delay_max_sec": 300,
+    "traffic_limited": false
   }
 }

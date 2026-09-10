@@ -26,8 +26,6 @@ from lib.flaresolverr_client import FlareSolverrSession
 from lib.sources import get_base_url
 
 
-BASE_URL = get_base_url("bookto31")
-
 # bookto31 전용 FlareSolverr 세션 (rate_limit=True: 8분 간격)
 _fs = FlareSolverrSession(rate_limit=True)
 
@@ -47,37 +45,42 @@ def _fetch_with_flaresolverr(url: str, max_attempts: int = 3, rate_limit: bool =
     return no_limit_fs.fetch(url, max_attempts=max_attempts)
 
 
-def fetch_home() -> Optional[str]:
-    """북토끼 홈 페이지."""
-    return _fetch_with_flaresolverr(f"{BASE_URL}/")
+def _site_url(source: str = "bookto31") -> str:
+    """소스별 크롤링 베이스 URL (bookto31/newto31 등 gnuboard 계열 공용)."""
+    return get_base_url(source)
 
 
-def fetch_search(query: str) -> Optional[str]:
+def fetch_home(source: str = "bookto31") -> Optional[str]:
+    """홈 페이지 (소스별 도메인)."""
+    return _fetch_with_flaresolverr(f"{_site_url(source)}/")
+
+
+def fetch_search(query: str, source: str = "bookto31") -> Optional[str]:
     """검색 결과 페이지 HTML."""
     import urllib.parse
     q = urllib.parse.quote(query)
-    return _fetch_with_flaresolverr(f"{BASE_URL}/bbs/search.php?stx={q}")
+    return _fetch_with_flaresolverr(f"{_site_url(source)}/bbs/search.php?stx={q}")
 
 
-def fetch_novel_index(novel_id: int) -> Optional[str]:
+def fetch_novel_index(novel_id: int, source: str = "bookto31") -> Optional[str]:
     """개별 소설(작품) 페이지 - 회차 목록 포함.
 
     GNUBOARD5 URL: /bbs/board.php?bo_table=novel&wr_id={novel_id}
     여기서 novel_id는 wr_id (작품 페이지 ID).
     """
     return _fetch_with_flaresolverr(
-        f"{BASE_URL}/bbs/board.php?bo_table=novel&wr_id={novel_id}"
+        f"{_site_url(source)}/bbs/board.php?bo_table=novel&wr_id={novel_id}"
     )
 
 
-def fetch_chapter(wr_id: int) -> Optional[str]:
+def fetch_chapter(wr_id: int, source: str = "bookto31") -> Optional[str]:
     """회차 본문 페이지 HTML.
 
     URL: /bbs/board.php?bo_table=novel&wr_id={wr_id}
     wr_id는 회차(에피소드)의 ID. 회차 목록 페이지에서 추출 가능.
     """
     return _fetch_with_flaresolverr(
-        f"{BASE_URL}/bbs/board.php?bo_table=novel&wr_id={wr_id}"
+        f"{_site_url(source)}/bbs/board.php?bo_table=novel&wr_id={wr_id}"
     )
 
 

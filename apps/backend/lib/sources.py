@@ -43,6 +43,13 @@ _DEFAULT_SOURCES = {
         "discover": "toki31_episodes",
         "speed_hint_sec": 30,
     },
+    "newto31": {
+        "domains": ["newto31.com"],
+        "base_url": "https://newto31.com",
+        "collector": "bookto31",
+        "discover": "gnuboard",
+        "speed_hint_sec": 300,
+    },
 }
 
 

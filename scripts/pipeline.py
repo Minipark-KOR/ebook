@@ -122,9 +122,14 @@ def _add_to_dlq(item: dict, error: str) -> None:
 # ============================================================
 
 def _collect_bookto31(wr_id: int, item: dict) -> tuple[bool, str, str, Optional[int]]:
-    """bookto31 수집기: FlareSolverr + GNUBOARD5 본문 파싱."""
+    """bookto31 계열 수집기: FlareSolverr + GNUBOARD5 본문 파싱.
+
+    bookto31/newto31 등 gnuboard 소스 공용. fetch 대상 도메인은
+    queue item의 source(→ sources.json base_url)를 따른다.
+    """
     from services.bookto31 import fetch_chapter, parse_chapter_body
-    html = fetch_chapter(wr_id)
+    source = item.get('source', 'bookto31')
+    html = fetch_chapter(wr_id, source=source)
     if not html:
         return False, "", "fetch 실패", None
     body = parse_chapter_body(html)
@@ -343,6 +348,25 @@ def discover_toki31(novel_id: int, novel_title: str = "", dry_run: bool = False)
     return added
 
 
+def _clean_page_title(title: str) -> str:
+    """<title>에서 사이트명/회차 번호 접미 제거 → 순수 작품 제목.
+
+    예:
+      "문종이 화폐를 거부함 - 217화"  → "문종이 화폐를 거부함"
+      "하남자의 탑 공략법 | 북토끼"   → "하남자의 탑 공략법"
+    """
+    import re as _re
+    t = (title or "").strip()
+    # 사이트명 접미 제거 (다양한 토끼 도메인 + 한글 표기)
+    t = _re.sub(
+        r"\s*[-–|]\s*(?:북토끼|뉴토끼|bookto31|bookto21|newto31|newtoki).*",
+        "", t, flags=_re.IGNORECASE,
+    )
+    # 회차 번호 접미 제거 (" - 217화/편/장")
+    t = _re.sub(r"\s*[-–|]\s*\d+\s*(?:화|편|장)\s*$", "", t)
+    return t.strip()
+
+
 def run_discover(wr_id: int, novel_title: str = "", max_pages: int = 50, source: str = "bookto31", dry_run: bool = False) -> int:
     """소스별 discover 분기.
 
@@ -372,12 +396,11 @@ def run_discover(wr_id: int, novel_title: str = "", max_pages: int = 50, source:
             import re as _re
             title_m = _re.search(r"<title>(.*?)</title>", html)
             if title_m:
-                title = title_m.group(1).strip()
-                title = _re.sub(r"\s*[-–|]\s*(?:북토끼|bookto31).*", "", title).strip()
+                title = _clean_page_title(title_m.group(1))
             if not title:
                 og_m = _re.search(r'<meta property="og:title" content="([^"]+)"', html)
                 if og_m:
-                    title = og_m.group(1).strip()
+                    title = _clean_page_title(og_m.group(1))
         print(f"TITLE:{title or novel_title or f'소설 {wr_id}'}")
         return 0
 
@@ -397,12 +420,11 @@ def run_discover(wr_id: int, novel_title: str = "", max_pages: int = 50, source:
                 import re as _re
                 title_m = _re.search(r"<title>(.*?)</title>", html)
                 if title_m:
-                    title = title_m.group(1).strip()
-                    title = _re.sub(r"\s*[-–|]\s*(?:북토끼|bookto31).*", "", title).strip()
+                    title = _clean_page_title(title_m.group(1))
                 if not title:
                     og_m = _re.search(r'<meta property="og:title" content="([^"]+)"', html)
                     if og_m:
-                        title = og_m.group(1).strip()
+                        title = _clean_page_title(og_m.group(1))
             if not html or len(html) < 1000:
                 log.info(f"  {page_param}={page}: 응답 없음, 중단")
                 break
@@ -705,8 +727,9 @@ def _run_collect_locked(limit: int = 0, source_filter: str = "") -> dict:
                 dedup_skipped += 1
                 continue
 
-        # collector 선택 (source별 분기)
-        collector = COLLECTORS.get(source)
+        # collector 선택 (source별 분기 — collector 키는 sources.json에서 해석)
+        from lib.sources import get_collector
+        collector = COLLECTORS.get(get_collector(source))
         if not collector:
             log.warning(f"  ✗ 알 수 없는 source: {source}")
             errors.append({"wr_id": wr_id, "error": f"Unknown source: {source}"})

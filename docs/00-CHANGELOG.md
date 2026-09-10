@@ -4,6 +4,13 @@
 
 ## 2026-09-10 (최신)
 
+### bookto31 본문 파싱 강화
+- **`parse_chapter_body`**: 단순 `.*?</div>` → **중첩 div 안전 추출** (`_extract_book_text_viewer`)
+  - 본문 div가 중첩 div를 포함하면 기존엔 첫 `</div>`에서 잘렸음 → depth 추적 파서로 수정
+- **불필요 요소 제거 강화**: script/style/iframe/noscript/form + 광고(banner/ad/popup 등) div 제거
+- **엔티티 디코딩**: `&amp;`/`&lt;` 등 → 실제 문자
+- 본문은 원래 텍스트만 저장 중이었고, 잔여물로 보이던 `<탑 26층...>` 등은 소설 본문 자체임을 확인
+
 ### 소스별 처리 격리 (북토끼/뉴토끼 독립 동작)
 - **문제**: 단일 큐 + `run_collect(limit=1)` 전체 처리 → toki31(유료 프록시) 407/한도 도달 시
   큐가 toki31로 가득 차면 bookto31이 굶어 죽음

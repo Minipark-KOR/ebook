@@ -111,21 +111,82 @@ def parse_chapter_body(html: str) -> str:
     """회차 본문 HTML에서 본문 텍스트 추출.
 
     북토끼/APMS는 <div class="view-content book-text-viewer"> 안에 본문이 들어있음.
+    중첩 div 안전 추출(depth 추적) + 불필요 요소 제거로 본문만 남긴다.
+    """
+    import html as html_lib
+    import re
+
+    section = _extract_book_text_viewer(html)
+    if section is None:
+        return ""
+
+    # 불필요 요소 제거 (스크립트/스타일/iframe/폼/광고)
+    section = re.sub(r"<script[^>]*>.*?</script>", "", section, flags=re.DOTALL | re.IGNORECASE)
+    section = re.sub(r"<style[^>]*>.*?</style>", "", section, flags=re.DOTALL | re.IGNORECASE)
+    section = re.sub(r"<iframe[^>]*>.*?</iframe>", "", section, flags=re.DOTALL | re.IGNORECASE)
+    section = re.sub(r"<noscript[^>]*>.*?</noscript>", "", section, flags=re.DOTALL | re.IGNORECASE)
+    section = re.sub(r"<form[^>]*>.*?</form>", "", section, flags=re.DOTALL | re.IGNORECASE)
+    # 광고/감지 div (클래스명 기반)
+    section = re.sub(
+        r'<div[^>]*class="[^"]*(?:ad|banner|popup|modal|toast|notice|footer|header)[^"]*"[^>]*>.*?</div>',
+        "", section, flags=re.DOTALL | re.IGNORECASE)
+
+    # 태그 → 개행, 엔티티 → 문자
+    clean = re.sub(r"<br\s*/?>", "\n", section, flags=re.IGNORECASE)
+    clean = re.sub(r"<p[^>]*>", "\n", clean, flags=re.IGNORECASE)
+    clean = re.sub(r"<[^>]+>", "", clean)
+    clean = html_lib.unescape(clean)
+    # 잔여 공백/개행 정리
+    clean = re.sub(r"[ \t]+", " ", clean)
+    clean = re.sub(r"\n\s*\n+", "\n", clean)
+    clean = re.sub(r"^\s+|\s+$", "", clean)
+    return clean.strip()
+
+
+def _extract_book_text_viewer(html: str) -> Optional[str]:
+    """본문 영역(<div class="view-content book-text-viewer">)을 중첩 div 안전 추출.
+
+    단순 .*?</div>는 중첩 div가 있으면 첫 </div>에서 잘린다.
+    태그 파서로 div depth를 추적해 본문 div의 전체 내부를 반환한다.
+
+    Returns:
+        본문 내부 HTML 또는 None
     """
     import re
-    m = re.search(
-        r'<div[^>]*class="view-content book-text-viewer"[^>]*>(.*?)</div>',
-        html,
-        re.DOTALL,
+
+    # 본문 시작 div 탐색
+    start_m = re.search(
+        r'<div[^>]*class="view-content book-text-viewer"[^>]*>',
+        html, re.IGNORECASE | re.DOTALL,
     )
-    if not m:
-        return ""
-    section = m.group(1)
-    clean = re.sub(r"<script[^>]*>.*?</script>", "", section, flags=re.DOTALL)
-    clean = re.sub(r"<style[^>]*>.*?</style>", "", clean, flags=re.DOTALL)
-    clean = re.sub(r"<[^>]+>", "\n", clean)
-    clean = re.sub(r"\n\s*\n", "\n", clean)
-    return clean.strip()
+    if not start_m:
+        return None
+    start = start_m.end()
+
+    # 시작 지점부터 div depth 추적
+    depth = 1
+    i = start
+    n = len(html)
+    while i < n and depth > 0:
+        tag_m = re.search(r"</?[a-zA-Z][^>]*>", html[i:], re.DOTALL)
+        if not tag_m:
+            break
+        tag = tag_m.group(0)
+        pos = i + tag_m.start()
+        self_closing = tag.rstrip().endswith("/>")
+        inner = tag[1:].lstrip()
+        m = re.match(r"(/?)([a-zA-Z0-9]+)", inner)
+        if m and not self_closing:
+            closing = bool(m.group(1))
+            tname = m.group(2).lower()
+            if tname == "div":
+                depth += -1 if closing else 1
+        i = pos + len(tag)
+        if depth <= 0:
+            return html[start:pos]
+
+    # 끝까지 갔으면 start~끝 반환
+    return html[start:] if start < n else None
 
 
 def is_novel_index_page(html: str) -> bool:

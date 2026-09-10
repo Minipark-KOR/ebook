@@ -48,28 +48,33 @@ QUEUE_FILE = WATCHER_DIR / "queue.json"
 # URL 파싱 — source + ID 자동 분기
 # ============================================================
 
-def parse_url(url: str) -> Tuple[Optional[str], Optional[str]]:
-    """URL에서 source와 ID 추출.
+def parse_url(url: str) -> Tuple[Optional[str], Optional[str], Optional[str]]:
+    """URL에서 source, ID, bo_table 추출.
 
     소스 레지스트리(sources.json)의 domains로 매칭.
     각 소스별 ID 추출 패턴은 소스 특성에 따라 분기:
-      - bookto31(GNUBOARD): wr_id=N
+      - bookto31(GNUBOARD): wr_id=N (+ bo_table)
       - toki31(newtoki): /novel/{id}
+    bo_table: gnuboard 게시판(콘텐츠 종류) — discover/collect에서 그대로 사용.
     Returns:
-        (source, id) 또는 (None, None)
+        (source, id, bo_table) 또는 (None, None, None)
     """
     from lib.sources import get_source_from_url, get_discover
 
     source = get_source_from_url(url)
     if not source:
-        return None, None
+        return None, None, None
     discover = get_discover(source)
     if discover == "toki31_episodes":
         m = re.search(r"/novel/(\d+)", url)
-        return (source, m.group(1)) if m else (None, None)
-    # 기본 GNUBOARD (bookto31 계열): wr_id=N
+        return (source, m.group(1), None) if m else (None, None, None)
+    # 기본 GNUBOARD (bookto31 계열): wr_id=N + bo_table
     m = re.search(r"wr_id=(\d+)", url)
-    return (source, m.group(1)) if m else (None, None)
+    if not m:
+        return None, None, None
+    bo_m = re.search(r"bo_table=([A-Za-z0-9_]+)", url)
+    bo_table = bo_m.group(1) if bo_m else "novel"
+    return (source, m.group(1), bo_table)
 
 
 # ============================================================
@@ -80,14 +85,14 @@ _JOBS: dict = {}
 _JOBS_LOCK = threading.Lock()
 
 
-def _extract_title(source: str, wr_id: str) -> str:
+def _extract_title(source: str, wr_id: str, bo_table: str = "novel") -> str:
     """제목 추출 (discover --dry-run 한 번만 실행)."""
     script = str(PIPELINE_SCRIPT)
     try:
-        result = subprocess.run(
-            ["python3", script, "discover", wr_id, "--dry-run", "--source", source],
-            capture_output=True, text=True, timeout=60,
-        )
+        cmd = ["python3", script, "discover", wr_id, "--dry-run", "--source", source]
+        if bo_table:
+            cmd += ["--bo-table", bo_table]
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
         for line in result.stdout.split("\n"):
             if line.startswith("TITLE:"):
                 return line.replace("TITLE:", "").strip()
@@ -96,26 +101,27 @@ def _extract_title(source: str, wr_id: str) -> str:
     return f"소설 {wr_id}"
 
 
-def _run_pipeline_job(source: str, novel_id: str) -> None:
+def _run_pipeline_job(source: str, novel_id: str, bo_table: str = "novel") -> None:
     """백그라운드: 제목 추출 → discover 큐 등록 → loop 시작."""
     script = str(PIPELINE_SCRIPT)
+    job_key = f"{bo_table or 'novel'}:{novel_id}"
 
     def _update(**kw):
         with _JOBS_LOCK:
-            if novel_id in _JOBS:
-                _JOBS[novel_id].update(kw)
+            if job_key in _JOBS:
+                _JOBS[job_key].update(kw)
 
     _update(status="제목 추출 중")
-    title = _extract_title(source, novel_id)
+    title = _extract_title(source, novel_id, bo_table)
     _update(title=title)
 
     _update(status="회차 탐색 중")
     try:
         # 전체 회차 확인 (max_pages 200) — 시간이 걸릴 수 있어 timeout 넉넉히
-        result = subprocess.run(
-            ["python3", script, "discover", novel_id, title, "200", "--source", source],
-            capture_output=True, text=True, timeout=1500,
-        )
+        cmd = ["python3", script, "discover", novel_id, title, "200", "--source", source]
+        if bo_table:
+            cmd += ["--bo-table", bo_table]
+        result = subprocess.run(cmd, timeout=600, capture_output=True, text=True)
         if result.returncode != 0:
             log.warning(f"discover 오류: {result.stderr[:500]}")
     except subprocess.TimeoutExpired:
@@ -382,7 +388,7 @@ async def start_pipeline(req: StartPipelineRequest):
         raise HTTPException(status_code=403, detail="비밀번호가 일치하지 않습니다")
 
     # 2. URL 파싱
-    source, novel_id = parse_url(req.url)
+    source, novel_id, bo_table = parse_url(req.url)
     if not source or not novel_id:
         raise HTTPException(
             status_code=400,
@@ -391,26 +397,28 @@ async def start_pipeline(req: StartPipelineRequest):
 
     # 3. 중복 시작 방지
     with _JOBS_LOCK:
-        if novel_id in _JOBS and _JOBS[novel_id]["status"] != "완료":
+        job_key = f"{bo_table or 'novel'}:{novel_id}"
+        if job_key in _JOBS and _JOBS[job_key]["status"] != "완료":
             return StartPipelineResponse(
                 ok=True,
                 source=source,
                 novel_id=novel_id,
-                title=_JOBS[novel_id].get("title", ""),
+                title=_JOBS[job_key].get("title", ""),
                 message="이미 파이프라인 작업이 진행 중입니다",
                 queue_stats=get_queue_stats(),
                 loop_running=is_loop_running(),
             )
-        _JOBS[novel_id] = {
+        _JOBS[job_key] = {
             "source": source,
             "novel_id": novel_id,
+            "bo_table": bo_table,
             "title": "",
             "status": "시작 중",
             "message": "",
         }
 
     # 4. 백그라운드 실행 후 즉시 응답
-    threading.Thread(target=_run_pipeline_job, args=(source, novel_id), daemon=True).start()
+    threading.Thread(target=_run_pipeline_job, args=(source, novel_id, bo_table), daemon=True).start()
 
     return StartPipelineResponse(
         ok=True,

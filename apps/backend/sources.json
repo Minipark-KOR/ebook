@@ -27,6 +27,10 @@
     "speed_hint_sec": 300,
     "delay_min_sec": 30,
     "delay_max_sec": 300,
-    "traffic_limited": false
+    "traffic_limited": false,
+    "bo_tables": {
+      "novel": "novel",
+      "fafa19": "webtoon"
+    }
   }
 }

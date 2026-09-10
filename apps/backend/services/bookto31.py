@@ -50,6 +50,11 @@ def _site_url(source: str = "bookto31") -> str:
     return get_base_url(source)
 
 
+def _board_url(source: str, bo_table: str, wr_id: int) -> str:
+    """gnuboard 회차/작품 페이지 URL."""
+    return f"{_site_url(source)}/bbs/board.php?bo_table={bo_table}&wr_id={wr_id}"
+
+
 def fetch_home(source: str = "bookto31") -> Optional[str]:
     """홈 페이지 (소스별 도메인)."""
     return _fetch_with_flaresolverr(f"{_site_url(source)}/")
@@ -62,26 +67,22 @@ def fetch_search(query: str, source: str = "bookto31") -> Optional[str]:
     return _fetch_with_flaresolverr(f"{_site_url(source)}/bbs/search.php?stx={q}")
 
 
-def fetch_novel_index(novel_id: int, source: str = "bookto31") -> Optional[str]:
+def fetch_novel_index(novel_id: int, source: str = "bookto31", bo_table: str = "novel") -> Optional[str]:
     """개별 소설(작품) 페이지 - 회차 목록 포함.
 
-    GNUBOARD5 URL: /bbs/board.php?bo_table=novel&wr_id={novel_id}
-    여기서 novel_id는 wr_id (작품 페이지 ID).
+    GNUBOARD5 URL: /bbs/board.php?bo_table={bo_table}&wr_id={novel_id}
+    여기서 novel_id는 wr_id (작품 페이지 ID). bo_table은 게시판(콘텐츠 종류).
     """
-    return _fetch_with_flaresolverr(
-        f"{_site_url(source)}/bbs/board.php?bo_table=novel&wr_id={novel_id}"
-    )
+    return _fetch_with_flaresolverr(_board_url(source, bo_table, novel_id))
 
 
-def fetch_chapter(wr_id: int, source: str = "bookto31") -> Optional[str]:
+def fetch_chapter(wr_id: int, source: str = "bookto31", bo_table: str = "novel") -> Optional[str]:
     """회차 본문 페이지 HTML.
 
-    URL: /bbs/board.php?bo_table=novel&wr_id={wr_id}
-    wr_id는 회차(에피소드)의 ID. 회차 목록 페이지에서 추출 가능.
+    URL: /bbs/board.php?bo_table={bo_table}&wr_id={wr_id}
+    wr_id는 회차(에피소드)의 ID. bo_table은 게시판(콘텐츠 종류).
     """
-    return _fetch_with_flaresolverr(
-        f"{_site_url(source)}/bbs/board.php?bo_table=novel&wr_id={wr_id}"
-    )
+    return _fetch_with_flaresolverr(_board_url(source, bo_table, wr_id))
 
 
 def parse_chapter_list(html: str, novel_id: int) -> List[Dict]:

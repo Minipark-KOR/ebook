@@ -125,11 +125,12 @@ def _collect_bookto31(wr_id: int, item: dict) -> tuple[bool, str, str, Optional[
     """bookto31 계열 수집기: FlareSolverr + GNUBOARD5 본문 파싱.
 
     bookto31/newto31 등 gnuboard 소스 공용. fetch 대상 도메인은
-    queue item의 source(→ sources.json base_url)를 따른다.
+    queue item의 source(→ sources.json base_url), 게시판은 item의 bo_table을 따른다.
     """
     from services.bookto31 import fetch_chapter, parse_chapter_body
     source = item.get('source', 'bookto31')
-    html = fetch_chapter(wr_id, source=source)
+    bo_table = item.get('bo_table', 'novel')
+    html = fetch_chapter(wr_id, source=source, bo_table=bo_table)
     if not html:
         return False, "", "fetch 실패", None
     body = parse_chapter_body(html)
@@ -171,6 +172,14 @@ def _parse_source() -> str:
         if arg == "--source" and i + 1 < len(sys.argv):
             return sys.argv[i + 1]
     return "bookto31"
+
+
+def _parse_bo_table() -> str:
+    """CLI 인자에서 --bo-table 추출 (gnuboard 게시판). 없으면 기본 "novel"."""
+    for i, arg in enumerate(sys.argv):
+        if arg == "--bo-table" and i + 1 < len(sys.argv):
+            return sys.argv[i + 1]
+    return "novel"
 
 # === 1단계: DISCOVER — wr_id 발견 → 큐에 추가 ===
 
@@ -370,10 +379,12 @@ def _clean_page_title(title: str) -> str:
     return t.strip()
 
 
-def run_discover(wr_id: int, novel_title: str = "", max_pages: int = 50, source: str = "bookto31", dry_run: bool = False) -> int:
+def run_discover(wr_id: int, novel_title: str = "", max_pages: int = 50, source: str = "bookto31", dry_run: bool = False, bo_table: str = "novel") -> int:
     """소스별 discover 분기.
 
     - gnuboard(bookto31 계열): 작품 메인에서 wr_id 발견 → 큐에 추가
+      bo_table: gnuboard 게시판(콘텐츠 종류) — URL의 bo_table을 그대로 사용
+      (예: newto31의 fafa19=웹툰, novel=소설)
     - toki31_episodes: 에피소드 목록 기반
     dry_run: 첫 페이지만 fetch해서 제목 추출 후 출력하고 종료.
     """
@@ -393,7 +404,7 @@ def run_discover(wr_id: int, novel_title: str = "", max_pages: int = 50, source:
 
     # dry_run: 첫 페이지만 fetch해서 제목 추출
     if dry_run:
-        url = f"{base}/bbs/board.php?bo_table=novel&wr_id={wr_id}&epage=1"
+        url = f"{base}/bbs/board.php?bo_table={bo_table}&wr_id={wr_id}&epage=1"
         html = fs.fetch(url)
         if html:
             import re as _re
@@ -415,7 +426,7 @@ def run_discover(wr_id: int, novel_title: str = "", max_pages: int = 50, source:
         page_seen = set()
         no_new_count = 0
         for page in range(1, max_pages + 1):
-            url = f"{base}/bbs/board.php?bo_table=novel&wr_id={wr_id}&{page_param}={page}"
+            url = f"{base}/bbs/board.php?bo_table={bo_table}&wr_id={wr_id}&{page_param}={page}"
             html = fs.fetch(url)
 
             # 첫 페이지에서 제목 추출
@@ -478,7 +489,7 @@ def run_discover(wr_id: int, novel_title: str = "", max_pages: int = 50, source:
             log.warning(f"  wr_id={wr_id}로 회차 발견 실패 → 저장된 챕터 wr_id={saved_wr}로 재시도")
             for page_param in ("epage", "spage"):
                 for page in range(1, min(max_pages, 200) + 1):
-                    url = f"{base}/bbs/board.php?bo_table=novel&wr_id={saved_wr}&{page_param}={page}"
+                    url = f"{base}/bbs/board.php?bo_table={bo_table}&wr_id={saved_wr}&{page_param}={page}"
                     html = fs.fetch(url)
                     if not html or len(html) < 1000:
                         break
@@ -525,6 +536,7 @@ def run_discover(wr_id: int, novel_title: str = "", max_pages: int = 50, source:
             "novel_title": novel_title,
             "chapter": chapter,
             "source": source,  # ← source 필드
+            "bo_table": bo_table,  # ← 게시판(콘텐츠 종류)
             "priority": 1 if chapter >= 800 else 5,
             "added_at": datetime.now(timezone.utc).isoformat(),
             "attempts": 0,
@@ -554,6 +566,7 @@ def run_discover(wr_id: int, novel_title: str = "", max_pages: int = 50, source:
                     meta = {}
             meta['main_wr_id'] = wr_id
             meta['source'] = source
+            meta['bo_table'] = bo_table
             meta['title'] = novel_title
             # 소스 기반 연재 상태 갱신 (완결 판정 포함)
             _update_novel_status_from_discover(meta, added, novel_title)
@@ -774,7 +787,9 @@ def _run_collect_locked(limit: int = 0, source_filter: str = "") -> dict:
 
         # 저장 (enrich/index 없이 순수 저장)
         chapter_num = item.get('chapter') or chapter_num
-        _save_chapter_only(novel_title, wr_id, body, chapter_num, source)
+        from lib.sources import get_media_type
+        media_type = get_media_type(source, item.get('bo_table'))
+        _save_chapter_only(novel_title, wr_id, body, chapter_num, source, media_type)
         _invalidate_saved_chapters(novel_title)  # 캐시 갱신 — 이후 중복 스킵 정확성
         _body_len = body[1] if isinstance(body, tuple) and len(body) == 2 else body
         log.info(f"  ✓ wr_id={wr_id} 저장 완료 ({len(_body_len)} chars)")
@@ -1099,10 +1114,11 @@ def _merge_into_queue(add_items: Optional[list] = None, remove_ids: Optional[set
         fcntl.flock(lockf, fcntl.LOCK_UN)
 
 
-def _save_chapter_only(novel_title: str, wr_id: int, body: str, chapter_num: Optional[int] = None, source: str = "bookto31") -> bool:
+def _save_chapter_only(novel_title: str, wr_id: int, body: str, chapter_num: Optional[int] = None, source: str = "bookto31", media_type: str = "novel") -> bool:
     """순수 저장 (enrich/index/revalidate 없이).
 
     body가 튜플 (title, content)이면 (newtoki/toki31 collector) content만 사용.
+    media_type: 저장 폴더 결정 ("novel"|"comic"|"webtoon")
     """
     from lib.storage import save_chapter as _save
 
@@ -1114,7 +1130,7 @@ def _save_chapter_only(novel_title: str, wr_id: int, body: str, chapter_num: Opt
             chapter_num = _extract_chapter_num(content)
         body = content
 
-    save_kwargs = {"source": source}
+    save_kwargs = {"source": source, "media_type": media_type}
     if chapter_num is not None:
         save_kwargs["chapter_num"] = chapter_num
     return _save(novel_title, wr_id, body, **save_kwargs)
@@ -1160,17 +1176,17 @@ def _build_epub_for_drained_novels(remaining_queue: list, touched_novels: dict) 
 
 # === 메인 ===
 
-def run_all(novel_main_wr_id: int, novel_title: str, source: str = "bookto31") -> dict:
+def run_all(novel_main_wr_id: int, novel_title: str, source: str = "bookto31", bo_table: str = "novel") -> dict:
     """전체 파이프라인 실행 (discover → collect → enrich → index → revalidate)."""
     results = {}
 
     log.info("=" * 50)
-    log.info(f"파이프라인 시작 (source={source})")
+    log.info(f"파이프라인 시작 (source={source}, bo_table={bo_table})")
     log.info("=" * 50)
 
     # 1. discover
     log.info("\n[1/5] DISCOVER — 회차 발견")
-    added = run_discover(novel_main_wr_id, novel_title, source=source)
+    added = run_discover(novel_main_wr_id, novel_title, source=source, bo_table=bo_table)
     results['discover'] = added
 
     if added == 0:
@@ -1252,8 +1268,9 @@ def _auto_discover() -> None:
         if not main_wr_id:
             continue
         log.info(f"  auto-discover: {title} (main_wr_id={main_wr_id}, source={source})")
+        bo_table = meta.get('bo_table') or 'novel'
         try:
-            added = run_discover(int(main_wr_id), title, max_pages=200, source=source)
+            added = run_discover(int(main_wr_id), title, max_pages=200, source=source, bo_table=bo_table)
             # 신규 회차 발견(queue 추가) 시 그 소설의 메타데이터도 갱신
             # (namu 30분 rate limit 때문에 수집 루프를 막지 않도록 백그라운드)
             if added > 0:
@@ -1293,10 +1310,11 @@ def main():
 
     if cmd == "discover":
         if len(sys.argv) < 3:
-            print("사용법: pipeline.py discover <wr_id> [novel_title] [max_pages] [--source bookto31|newtoki] [--dry-run]")
+            print("사용법: pipeline.py discover <wr_id> [novel_title] [max_pages] [--source bookto31|newtoki] [--bo-table fafa19] [--dry-run]")
             return 1
         wr_id = int(sys.argv[2])
         source = _parse_source()
+        bo_table = _parse_bo_table()
         dry_run = "--dry-run" in sys.argv
         # title과 max_pages는 --source/--dry-run 이전의 위치 인자
         title = ""
@@ -1309,7 +1327,7 @@ def main():
                 pages = int(positional[1])
             except ValueError:
                 pass
-        run_discover(wr_id, title, pages, source, dry_run)
+        run_discover(wr_id, title, pages, source, dry_run, bo_table)
 
     elif cmd == "collect":
         limit = 0
@@ -1359,12 +1377,13 @@ def main():
 
     elif cmd == "all":
         if len(sys.argv) < 4:
-            print("사용법: pipeline.py all <wr_id> <novel_title> [--source bookto31|newtoki]")
+            print("사용법: pipeline.py all <wr_id> <novel_title> [--source bookto31|newtoki] [--bo-table fafa19]")
             return 1
         wr_id = int(sys.argv[2])
         title = sys.argv[3]
         source = _parse_source()
-        run_all(wr_id, title, source)
+        bo_table = _parse_bo_table()
+        run_all(wr_id, title, source, bo_table)
 
     elif cmd == "loop":
         """collect → index → revalidate 무한 루프 (5분 간격).

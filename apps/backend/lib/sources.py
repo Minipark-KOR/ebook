@@ -49,6 +49,10 @@ _DEFAULT_SOURCES = {
         "collector": "bookto31",
         "discover": "gnuboard",
         "speed_hint_sec": 300,
+        "bo_tables": {
+            "novel": "novel",
+            "fafa19": "webtoon",
+        },
     },
 }
 
@@ -69,6 +73,9 @@ class SourceConfig(BaseModel):
     # 프록시(유료 트래픽) 사용 여부 — True면 트래픽 가드(일일 한도) 적용.
     # bookto31은 FlareSolverr 로컬(무료), toki31은 DataImpulse/MaskProxy(유료).
     traffic_limited: bool = False
+    # bo_table(사이트 게시판) → media_type 매핑. "novel" 기본, 미정의 시 novel.
+    # 예: newto31: {"fafa19": "webtoon", "novel": "novel"}
+    bo_tables: dict[str, str] = Field(default_factory=dict)
 
 
 class SourcesConfig(BaseModel):
@@ -151,6 +158,22 @@ def get_traffic_limited(source: str) -> bool:
     """
     cfg = load_sources().get(source)
     return bool(cfg.traffic_limited) if cfg else False
+
+
+def get_media_type(source: str, bo_table: Optional[str]) -> str:
+    """bo_table(사이트 게시판) → media_type 판별.
+
+    sources.json의 bo_tables 매핑을 사용하고, 미정의/누락 시 기본 "novel".
+    """
+    mt = (bo_table or "").strip().lower()
+    if not mt:
+        return "novel"
+    cfg = load_sources().get(source)
+    if cfg and cfg.bo_tables:
+        mapped = cfg.bo_tables.get(mt)
+        if mapped:
+            return mapped
+    return "novel"
 
 
 def list_sources() -> list[str]:

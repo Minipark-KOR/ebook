@@ -283,8 +283,8 @@ def discover_toki31(novel_id: int, novel_title: str = "", dry_run: bool = False)
     queue = _load_queue()
     existing_ids = {item['wr_id'] for item in queue}
     novel_id_dir = (title or novel_title).replace(' ', '_').replace('/', '_') if (title or novel_title) else f"novel_{novel_id}"
-    from lib.storage import NOVELS_DIR
-    novel_dir = NOVELS_DIR / novel_id_dir
+    from lib.paths import resolve_novel_dir
+    novel_dir = resolve_novel_dir(novel_id_dir)
     saved = set()
     if novel_dir.exists():
         for f in novel_dir.glob("*.json"):
@@ -440,8 +440,8 @@ def run_discover(wr_id: int, novel_title: str = "", max_pages: int = 50, source:
     # 저장된 챕터에서 유효한 wr_id를 뽑아 재시도. (에피소드 셀렉트가 0개 나옴)
     if not all_chapters and not dry_run:
         novel_id_dir = novel_title.replace(' ', '_').replace('/', '_') if novel_title else f"novel_{wr_id}"
-        from lib.storage import NOVELS_DIR
-        novel_dir = NOVELS_DIR / novel_id_dir
+        from lib.paths import resolve_novel_dir
+        novel_dir = resolve_novel_dir(novel_id_dir)
         saved_wr = None
         if novel_dir.exists():
             for f in sorted(novel_dir.glob("*.json"), key=lambda p: int(p.stem)):
@@ -471,8 +471,8 @@ def run_discover(wr_id: int, novel_title: str = "", max_pages: int = 50, source:
     saved_ids = set()
     try:
         novel_id_dir = novel_title.replace(' ', '_').replace('/', '_') if novel_title else f"novel_{wr_id}"
-        from lib.storage import NOVELS_DIR
-        novel_dir = NOVELS_DIR / novel_id_dir
+        from lib.paths import resolve_novel_dir
+        novel_dir = resolve_novel_dir(novel_id_dir)
         if novel_dir.exists():
             for f in novel_dir.glob("*.json"):
                 if f.name in ("meta.json", "_chapters_index.json"):
@@ -513,8 +513,8 @@ def run_discover(wr_id: int, novel_title: str = "", max_pages: int = 50, source:
     if novel_title:
         try:
             novel_id_dir = novel_title.replace(' ', '_').replace('/', '_')
-            from lib.storage import NOVELS_DIR
-            novel_dir = NOVELS_DIR / novel_id_dir
+            from lib.paths import resolve_novel_dir
+            novel_dir = resolve_novel_dir(novel_id_dir)
             novel_dir.mkdir(parents=True, exist_ok=True)
             meta_file = novel_dir / 'meta.json'
             meta = {}
@@ -573,8 +573,8 @@ def _load_saved_chapters(novel_title: str) -> set:
     if novel_id in _saved_chapters_cache:
         return _saved_chapters_cache[novel_id]
 
-    from lib.storage import NOVELS_DIR
-    novel_dir = NOVELS_DIR / novel_id
+    from lib.paths import resolve_novel_dir
+    novel_dir = resolve_novel_dir(novel_id)
     saved: set = set()
 
     # 1) 인덱스 캐시 우선 (빠름 — 파일별 스캔 회피)
@@ -831,11 +831,15 @@ def run_enrich(novel_id: Optional[str] = None, force: bool = False) -> dict:
     참고: status는 namu가 아닌 discover(소스 기반)가 결정하므로 여기서 덮어쓰지 않는다.
     """
     from services.metadata_namu import get_metadata
+    from lib.paths import find_novel_dir, iter_novel_dirs
 
-    DATA_DIR = Path('/opt/ai_data/flaresolverr/novels')
     results = {"enriched": 0, "skipped": 0, "errors": 0}
 
-    targets = [DATA_DIR / novel_id] if novel_id else sorted(DATA_DIR.iterdir())
+    if novel_id:
+        d = find_novel_dir(novel_id)
+        targets = [d] if d else []
+    else:
+        targets = [p for _mt, p in iter_novel_dirs()]
     for novel_dir in targets:
         if not novel_dir.is_dir():
             continue
@@ -880,10 +884,15 @@ def run_enrich(novel_id: Optional[str] = None, force: bool = False) -> dict:
 
 def run_index(novel_id: Optional[str] = None) -> dict:
     """챕터 인덱스 캐시 재구축."""
-    from services.data import rebuild_chapters_index, DATA_DIR
+    from services.data import rebuild_chapters_index
+    from lib.paths import find_novel_dir, iter_novel_dirs
 
     results = {"indexed": 0, "errors": 0}
-    targets = [DATA_DIR / novel_id] if novel_id else sorted(DATA_DIR.iterdir())
+    if novel_id:
+        d = find_novel_dir(novel_id)
+        targets = [d] if d else []
+    else:
+        targets = [p for _mt, p in iter_novel_dirs()]
 
     for novel_dir in targets:
         if not novel_dir.is_dir():
@@ -1138,11 +1147,9 @@ def _auto_discover() -> None:
     queue에 없거나 이미 완결인 작품은 스킵. (완결 → 월간 체크 목록에서 제외)
     """
     from lib.sources import get_discover
+    from lib.paths import iter_novel_dirs
 
-    novels_dir = Path('/opt/ai_data/flaresolverr/novels')
-    if not novels_dir.exists():
-        return
-    for novel_dir in sorted(novels_dir.iterdir()):
+    for _media_type, novel_dir in iter_novel_dirs():
         if not novel_dir.is_dir():
             continue
         meta_file = novel_dir / 'meta.json'
@@ -1261,11 +1268,11 @@ def main():
         사용법: pipeline.py epub [novel_id ...]   (인자 없으면 전체 소설)
         fingerprint 기반이라 변경 없으면 no-op.
         """
-        from services.data import DATA_DIR
+        from lib.paths import iter_novel_dirs
         from services.epub import maybe_build_epub
         targets = sys.argv[2:]
         built = 0
-        for novel_dir in sorted(DATA_DIR.iterdir()):
+        for _media_type, novel_dir in iter_novel_dirs():
             nid = novel_dir.name
             if not novel_dir.is_dir() or nid.startswith("."):
                 continue

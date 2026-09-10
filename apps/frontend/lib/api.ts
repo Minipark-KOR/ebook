@@ -2,6 +2,8 @@
 // The catch-all route [/api/[...slug]] automatically URL-decodes path
 // segments, so the client must send raw (un-encoded) Korean IDs.
 
+export type MediaType = "novel" | "comic" | "webtoon";
+
 export interface Novel {
   id: string;
   title: string;
@@ -13,6 +15,7 @@ export interface Novel {
   status?: string;
   publisher?: string;
   namuUrl?: string;
+  mediaType?: MediaType;
 }
 
 export interface Chapter {

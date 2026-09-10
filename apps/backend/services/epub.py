@@ -29,8 +29,9 @@ from ebooklib.epub import (
     write_epub,
 )
 
+from lib.paths import find_novel_dir
 
-DATA_DIR = Path("/opt/ai_data/flaresolverr/novels")
+
 FONTS_DIR = Path("/opt/workspace/ebooklib/scripts/fonts")
 COVERS_DIR = Path("/opt/ai_data/flaresolverr/covers")
 EPUB_DIR = Path("/opt/ai_data/flaresolverr/epub")
@@ -280,8 +281,8 @@ def build_epub(novel_id: str) -> Optional[bytes]:
     Returns:
         EPUB 파일 바이트. 실패 시 None.
     """
-    novel_dir = DATA_DIR / novel_id
-    if not novel_dir.is_dir():
+    novel_dir = find_novel_dir(novel_id)
+    if not novel_dir or not novel_dir.is_dir():
         return None
 
     chapter_files = [
@@ -399,7 +400,9 @@ def build_epub(novel_id: str) -> Optional[bytes]:
 
 def get_novel_title(novel_id: str) -> str:
     """소설 제목 조회."""
-    novel_dir = DATA_DIR / novel_id
+    novel_dir = find_novel_dir(novel_id)
+    if not novel_dir:
+        return novel_id
     meta_file = novel_dir / "meta.json"
     if meta_file.exists():
         with open(meta_file, "r", encoding="utf-8") as f:
@@ -418,8 +421,8 @@ def get_novel_fingerprint(novel_id: str) -> Optional[dict]:
     (챕터 수, 최고 chapter 번호, 가장 최근 collected_at)으로 구성.
     이 값이 바뀌면 EPUB 재제작이 필요함을 의미한다.
     """
-    novel_dir = DATA_DIR / novel_id
-    if not novel_dir.is_dir():
+    novel_dir = find_novel_dir(novel_id)
+    if not novel_dir or not novel_dir.is_dir():
         return None
     chapter_files = [
         f for f in novel_dir.iterdir()

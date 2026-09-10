@@ -8,8 +8,13 @@ import re
 from pathlib import Path
 from typing import Optional
 
+from lib.paths import (
+    normalize_media_type,
+    find_novel_dir,
+    find_novel_dir_with_type,
+    iter_novel_dirs,
+)
 
-DATA_DIR = Path("/opt/ai_data/flaresolverr/novels")
 
 # 인덱스 캐시 파일명
 CHAPTERS_INDEX_FILE = "_chapters_index.json"
@@ -128,39 +133,44 @@ def resolve_status(meta: dict, novel_dir: Path) -> str:
     return "연재중"
 
 
-def get_novel_list() -> list[dict]:
-    """소설 목록 조회"""
+def get_novel_list(media_type: Optional[str] = None) -> list[dict]:
+    """작품 목록 조회 (media_type 지정 시 해당 타입만)."""
+    want = normalize_media_type(media_type) if media_type else None
     novels = []
-    for novel_dir in DATA_DIR.iterdir():
-        if novel_dir.is_dir() and not novel_dir.name.startswith("."):
-            meta_file = novel_dir / "meta.json"
-            if meta_file.exists():
-                with open(meta_file, "r", encoding="utf-8") as f:
-                    meta = json.load(f)
-                    meta["status"] = resolve_status(meta, novel_dir)
-                    novels.append(meta)
-            else:
-                # 디렉토리 이름으로 메타데이터 생성
-                chapters = list(novel_dir.glob("*.json"))
-                if chapters:
-                    novels.append(
-                        {
-                            "id": novel_dir.name,
-                            "title": novel_dir.name.replace("_", " "),
-                            "author": "미상",
-                            "totalChapters": len(chapters),
-                            "coverUrl": None,
-                            "status": resolve_status({}, novel_dir),
-                        }
-                    )
+    for folder_type, novel_dir in iter_novel_dirs():
+        if want and folder_type != want:
+            continue
+        meta_file = novel_dir / "meta.json"
+        if meta_file.exists():
+            with open(meta_file, "r", encoding="utf-8") as f:
+                meta = json.load(f)
+            meta["status"] = resolve_status(meta, novel_dir)
+        else:
+            # 디렉토리 이름으로 메타데이터 생성
+            chapters = list(novel_dir.glob("*.json"))
+            if not chapters:
+                continue
+            meta = {
+                "id": novel_dir.name,
+                "title": novel_dir.name.replace("_", " "),
+                "author": "미상",
+                "totalChapters": len(chapters),
+                "coverUrl": None,
+                "status": resolve_status({}, novel_dir),
+            }
+        mt = normalize_media_type(meta.get("media_type") or folder_type)
+        meta["media_type"] = mt
+        meta["mediaType"] = mt
+        novels.append(meta)
     return novels
 
 
 def get_novel_detail(novel_id: str) -> Optional[dict]:
-    """소설 상세 조회"""
-    novel_dir = DATA_DIR / novel_id
-    if not novel_dir.exists():
+    """작품 상세 조회 (media 폴더 전체 검색)."""
+    found = find_novel_dir_with_type(novel_id)
+    if not found:
         return None
+    folder_type, novel_dir = found
 
     # meta.json이 있으면 우선 사용
     meta_file = novel_dir / "meta.json"
@@ -170,30 +180,32 @@ def get_novel_detail(novel_id: str) -> Optional[dict]:
         # 챕터 수는 실제 파일 기준으로 갱신 (meta.json, 인덱스 제외)
         chapters = [f for f in novel_dir.glob("*.json")
                     if f.name not in ("meta.json", CHAPTERS_INDEX_FILE)]
-        chapter_count = len(chapters)
-        meta["totalChapters"] = chapter_count
+        meta["totalChapters"] = len(chapters)
         meta["status"] = resolve_status(meta, novel_dir)
-        return meta
+    else:
+        chapters = [f for f in novel_dir.glob("*.json")
+                    if f.name not in ("meta.json", CHAPTERS_INDEX_FILE)]
+        if not chapters:
+            return None
+        meta = {
+            "id": novel_id,
+            "title": novel_id.replace("_", " "),
+            "author": "미상",
+            "totalChapters": len(chapters),
+            "coverUrl": None,
+            "status": resolve_status({}, novel_dir),
+        }
 
-    chapters = [f for f in novel_dir.glob("*.json")
-                if f.name not in ("meta.json", CHAPTERS_INDEX_FILE)]
-    if not chapters:
-        return None
-
-    return {
-        "id": novel_id,
-        "title": novel_id.replace("_", " "),
-        "author": "미상",
-        "totalChapters": len(chapters),
-        "coverUrl": None,
-        "status": resolve_status({}, novel_dir),
-    }
+    mt = normalize_media_type(meta.get("media_type") or folder_type)
+    meta["media_type"] = mt
+    meta["mediaType"] = mt
+    return meta
 
 
 def get_chapter_list(novel_id: str, page: int = 1, limit: int = 20) -> dict:
     """회차 목록 조회 (인덱스 캐시 사용)"""
-    novel_dir = DATA_DIR / novel_id
-    if not novel_dir.exists():
+    novel_dir = find_novel_dir(novel_id)
+    if not novel_dir:
         return {"data": [], "pagination": {"page": page, "limit": limit, "total": 0}}
 
     # 인덱스 캐시에서 로드
@@ -224,68 +236,67 @@ def extract_images_from_content(content: str) -> list[str]:
 
 
 def get_chapter_detail(wr_id: int) -> Optional[dict]:
-    """회차 상세 조회"""
-    for novel_dir in DATA_DIR.iterdir():
-        if novel_dir.is_dir() and not novel_dir.name.startswith("."):
-            chapter_file = novel_dir / f"{wr_id}.json"
-            if not chapter_file.exists() or chapter_file.name in ("meta.json", CHAPTERS_INDEX_FILE):
-                continue
-            try:
-                with open(chapter_file, "r", encoding="utf-8") as f:
-                    data = json.load(f)
+    """회차 상세 조회 (media 폴더 전체 검색)"""
+    for _folder_type, novel_dir in iter_novel_dirs():
+        chapter_file = novel_dir / f"{wr_id}.json"
+        if not chapter_file.exists() or chapter_file.name in ("meta.json", CHAPTERS_INDEX_FILE):
+            continue
+        try:
+            with open(chapter_file, "r", encoding="utf-8") as f:
+                data = json.load(f)
 
-                # 이전/다음 회차 찾기 (meta.json, 인덱스 제외)
-                # 정렬 기준: chapter 번호 (파일명 wr_id가 아니라 회차 번호)
-                # 화산귀환처럼 wr_id 정렬이 뒤섞이는 작품 대비.
-                chapter_files = [
-                    f for f in novel_dir.glob("*.json")
-                    if f.name not in ("meta.json", CHAPTERS_INDEX_FILE)
-                ]
+            # 이전/다음 회차 찾기 (meta.json, 인덱스 제외)
+            # 정렬 기준: chapter 번호 (파일명 wr_id가 아니라 회차 번호)
+            # 화산귀환처럼 wr_id 정렬이 뒤섞이는 작품 대비.
+            chapter_files = [
+                f for f in novel_dir.glob("*.json")
+                if f.name not in ("meta.json", CHAPTERS_INDEX_FILE)
+            ]
 
-                def _chapter_key(f) -> int:
-                    try:
-                        with open(f, "r", encoding="utf-8") as fh:
-                            d = json.load(fh)
-                        ch = d.get("chapter")
-                        if isinstance(ch, int) and ch > 0:
-                            return ch
-                    except Exception:
-                        pass
-                    # chapter 없으면 wr_id로 폴백
-                    try:
-                        return int(f.stem)
-                    except ValueError:
-                        return 0
+            def _chapter_key(f) -> int:
+                try:
+                    with open(f, "r", encoding="utf-8") as fh:
+                        d = json.load(fh)
+                    ch = d.get("chapter")
+                    if isinstance(ch, int) and ch > 0:
+                        return ch
+                except Exception:
+                    pass
+                # chapter 없으면 wr_id로 폴백
+                try:
+                    return int(f.stem)
+                except ValueError:
+                    return 0
 
-                chapters = sorted(chapter_files, key=_chapter_key)
-                current_idx = None
-                for idx, ch in enumerate(chapters):
-                    if ch.stem == str(wr_id):
-                        current_idx = idx
-                        break
+            chapters = sorted(chapter_files, key=_chapter_key)
+            current_idx = None
+            for idx, ch in enumerate(chapters):
+                if ch.stem == str(wr_id):
+                    current_idx = idx
+                    break
 
-                prev_chapter = None
-                next_chapter = None
-                if current_idx is not None:
-                    if current_idx > 0:
-                        prev_file = chapters[current_idx - 1]
-                        prev_chapter = int(prev_file.stem)
-                    if current_idx < len(chapters) - 1:
-                        next_file = chapters[current_idx + 1]
-                        next_chapter = int(next_file.stem)
+            prev_chapter = None
+            next_chapter = None
+            if current_idx is not None:
+                if current_idx > 0:
+                    prev_file = chapters[current_idx - 1]
+                    prev_chapter = int(prev_file.stem)
+                if current_idx < len(chapters) - 1:
+                    next_file = chapters[current_idx + 1]
+                    next_chapter = int(next_file.stem)
 
-                content = data.get("content", "")
-                images = extract_images_from_content(content)
+            content = data.get("content", "")
+            images = extract_images_from_content(content)
 
-                return {
-                    "wr_id": data.get("wr_id"),
-                    "chapter": data.get("chapter"),
-                    "title": data.get("title"),
-                    "content": content,
-                    "images": images,
-                    "prevChapter": prev_chapter,
-                    "nextChapter": next_chapter,
-                }
-            except (json.JSONDecodeError, KeyError):
-                continue
+            return {
+                "wr_id": data.get("wr_id"),
+                "chapter": data.get("chapter"),
+                "title": data.get("title"),
+                "content": content,
+                "images": images,
+                "prevChapter": prev_chapter,
+                "nextChapter": next_chapter,
+            }
+        except (json.JSONDecodeError, KeyError):
+            continue
     return None

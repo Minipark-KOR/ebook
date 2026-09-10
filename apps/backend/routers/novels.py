@@ -6,6 +6,7 @@
 import requests
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import Response
+from typing import Optional
 
 from services.data import get_novel_list, get_novel_detail
 
@@ -72,9 +73,9 @@ async def image_proxy(url: str = Query(..., description="원본 이미지 URL"))
 
 
 @router.get("/novels")
-async def get_novels():
-    """소설 목록 조회"""
-    novels = get_novel_list()
+async def get_novels(type: Optional[str] = Query(None, description="novel | comic | webtoon")):
+    """작품 목록 조회 (type 지정 시 해당 미디어 타입만)"""
+    novels = get_novel_list(type)
     return {"novels": novels}
 
 

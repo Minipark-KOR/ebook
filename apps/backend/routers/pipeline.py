@@ -29,6 +29,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from services.data import resolve_status
+from lib.paths import MEDIA_DIRS, iter_novel_dirs
 
 log = logging.getLogger("pipeline_router")
 
@@ -189,8 +190,6 @@ def get_queue_stats() -> dict:
         return {"total": 0, "by_source": {}, "next_item": None}
 
 
-NOVELS_DIR = Path("/opt/ai_data/flaresolverr/novels")
-
 # ETA 추정 TTL 캐시 (novel_dir.name → (result, ts))
 _ETA_CACHE: dict = {}
 _ETA_CACHE_TS: dict = {}
@@ -263,7 +262,7 @@ def get_novel_status() -> list[dict]:
     """
     novels = []
     try:
-        if not NOVELS_DIR.exists():
+        if not any(d.exists() for d in MEDIA_DIRS.values()):
             return novels
         # queue 1회 로드
         queue_items = []
@@ -290,15 +289,15 @@ def get_novel_status() -> list[dict]:
         eta_by_title: dict = {}
         for t, info in novel_q.items():
             novel_dir = None
-            for cand in NOVELS_DIR.iterdir():
-                if cand.is_dir() and not cand.name.startswith(".") and cand.name.replace("_", " ") == t:
+            for _mt, cand in iter_novel_dirs():
+                if cand.name.replace("_", " ") == t:
                     novel_dir = cand
                     break
             per = _estimate_seconds_per_chapter(novel_dir, source=info["source"]) if novel_dir else 30
             cumulative += info["count"] * per
             eta_by_title[t] = int(cumulative)
 
-        for novel_dir in sorted(NOVELS_DIR.iterdir()):
+        for media_type, novel_dir in iter_novel_dirs():
             if not novel_dir.is_dir() or novel_dir.name.startswith("."):
                 continue
             meta_file = novel_dir / "meta.json"
@@ -328,6 +327,7 @@ def get_novel_status() -> list[dict]:
             novels.append({
                 "id": novel_dir.name,
                 "title": title,
+                "media_type": media_type,
                 "saved": saved,
                 "total": total,
                 "status": status,

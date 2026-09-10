@@ -13,15 +13,20 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
+from lib.paths import (
+    DEFAULT_MEDIA_TYPE,
+    normalize_media_type,
+    novel_dir_for,
+    find_novel_dir,
+)
 
-NOVELS_DIR = Path("/opt/ai_data/flaresolverr/novels")
+
 COVERS_DIR = Path("/opt/ai_data/flaresolverr/covers")
 
 
-def get_novel_dir(novel_title: str) -> Path:
-    """소설명 → 디렉토리 경로."""
-    novel_id = novel_title.replace(" ", "_").replace("/", "_") if novel_title else "unknown"
-    return NOVELS_DIR / novel_id
+def get_novel_dir(novel_title: str, media_type: str = DEFAULT_MEDIA_TYPE) -> Path:
+    """소설명 + media_type → 디렉토리 경로 (존재 여부 무관)."""
+    return novel_dir_for(novel_title, media_type)
 
 
 def _extract_chapter_num(body: str) -> Optional[int]:
@@ -48,6 +53,7 @@ def save_chapter(
     body: str,
     source: str = "bookto31",
     chapter_num: Optional[int] = None,
+    media_type: str = DEFAULT_MEDIA_TYPE,
 ) -> bool:
     """챕터 본문을 JSON 파일로 저장 + meta.json 갱신.
 
@@ -57,10 +63,12 @@ def save_chapter(
         body: 챕터 본문 텍스트
         source: 수집 소스 ("bookto31" | "toki31")
         chapter_num: 회차 번호 (None이면 본문에서 추출)
+        media_type: "novel" | "comic" | "webtoon" (기본 novel)
 
     Returns:
         성공 시 True
     """
+    media_type = normalize_media_type(media_type)
     if chapter_num is None:
         chapter_num = _extract_chapter_num(body)
     if chapter_num is None:
@@ -70,7 +78,7 @@ def save_chapter(
         chapter_num = None
 
     novel_id = novel_title.replace(" ", "_").replace("/", "_") if novel_title else f"novel_{wr_id}"
-    novel_dir = NOVELS_DIR / novel_id
+    novel_dir = novel_dir_for(novel_title or f"novel_{wr_id}", media_type)
     novel_dir.mkdir(parents=True, exist_ok=True)
 
     # 챕터 파일 저장
@@ -90,6 +98,7 @@ def save_chapter(
         "url": f"https://{source}.com/bbs/board.php?bo_table=novel&wr_id={wr_id}",
         "collected_at": datetime.now(timezone.utc).isoformat(),
         "source": source,
+        "media_type": media_type,
     })
 
     try:
@@ -99,7 +108,7 @@ def save_chapter(
         return False
 
     # meta.json 갱신
-    _update_meta(novel_dir, novel_id, novel_title)
+    _update_meta(novel_dir, novel_id, novel_title, media_type)
 
     # 챕터 인덱스 캐시 갱신 (API 성능 최적화)
     try:
@@ -111,8 +120,14 @@ def save_chapter(
     return True
 
 
-def _update_meta(novel_dir: Path, novel_id: str, novel_title: str) -> None:
+def _update_meta(
+    novel_dir: Path,
+    novel_id: str,
+    novel_title: str,
+    media_type: str = DEFAULT_MEDIA_TYPE,
+) -> None:
     """meta.json 생성/업데이트."""
+    media_type = normalize_media_type(media_type)
     meta_file = novel_dir / "meta.json"
 
     try:
@@ -128,34 +143,49 @@ def _update_meta(novel_dir: Path, novel_id: str, novel_title: str) -> None:
                 "status": "unknown",
                 "publisher": "북토끼",
                 "namuUrl": None,
+                "media_type": media_type,
             }
             with open(meta_file, "w", encoding="utf-8") as f:
                 json.dump(meta, f, ensure_ascii=False, indent=2)
         else:
             with open(meta_file, "r", encoding="utf-8") as f:
                 meta = json.load(f)
+            changed = False
+            if meta.get("media_type") != media_type:
+                meta["media_type"] = media_type
+                changed = True
             chapter_files = list(novel_dir.glob("*.json"))
             chapter_count = sum(1 for f in chapter_files if f.stem.isdigit())
             if meta.get("totalChapters", 0) < chapter_count:
                 meta["totalChapters"] = chapter_count
+                changed = True
+            if changed:
                 with open(meta_file, "w", encoding="utf-8") as f:
                     json.dump(meta, f, ensure_ascii=False, indent=2)
     except Exception:
         pass
 
 
-def update_meta_from_namu(novel_title: str, namu_meta: dict) -> bool:
+def update_meta_from_namu(
+    novel_title: str,
+    namu_meta: dict,
+    media_type: Optional[str] = None,
+) -> bool:
     """namu.wiki 메타데이터로 meta.json 업데이트.
 
     Args:
         novel_title: 소설 제목
         namu_meta: metadata_namu.get_metadata() 반환 dict
+        media_type: 저장 위치 힌트. None이면 media 폴더 전체를 검색한다.
 
     Returns:
         성공 시 True
     """
     novel_id = novel_title.replace(" ", "_").replace("/", "_")
-    novel_dir = NOVELS_DIR / novel_id
+    if media_type is not None:
+        novel_dir = novel_dir_for(novel_title, media_type)
+    else:
+        novel_dir = find_novel_dir(novel_id) or novel_dir_for(novel_title)
     meta_file = novel_dir / "meta.json"
 
     if not meta_file.exists():

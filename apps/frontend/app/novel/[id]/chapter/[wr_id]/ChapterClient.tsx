@@ -139,16 +139,15 @@ export default function ChapterClient({
             </p>
           ))}
           {chapter.images && chapter.images.length > 0 && (
-            <div className="mt-8 space-y-4">
+            <div className="mt-8 leading-none">
               {chapter.images.map((imgUrl: string, idx: number) => (
-                <div key={idx} className="text-center">
-                  <img
-                    src={imgUrl}
-                    alt={`삽화 ${idx + 1}`}
-                    className="max-w-full h-auto rounded-lg shadow-lg mx-auto"
-                    loading="lazy"
-                  />
-                </div>
+                <img
+                  key={idx}
+                  src={imgUrl}
+                  alt={`삽화 ${idx + 1}`}
+                  className="block w-full h-auto"
+                  loading="lazy"
+                />
               ))}
             </div>
           )}

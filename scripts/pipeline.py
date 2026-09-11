@@ -192,6 +192,74 @@ def _download_webtoon_images(wr_id: int, urls: list) -> list:
     return out
 
 
+def retry_failed_webtoon_images() -> dict:
+    """웹툰 챕터에 남은 원격 이미지 URL을 재다운로드 (월 1회 체크).
+
+    CDN이 일시적으로 404/차단했다가 복구된 이미지를 로컬로 채운다.
+    content에서 https 원격 URL을 찾아 다운로드 성공 시 로컬 경로로 교체한다.
+    """
+    import re as _re
+    import urllib.request
+
+    base = Path('/opt/ai_data/flaresolverr/webtoons')
+    images_base = Path('/opt/ai_data/flaresolverr/webtoon_images')
+    if not base.exists():
+        return {"checked": 0, "fixed": 0}
+    fixed = 0
+    checked = 0
+    for nd in sorted(base.iterdir()):
+        if not nd.is_dir() or nd.name.startswith('.'):
+            continue
+        for f in sorted(nd.glob('*.json')):
+            if f.name in ('meta.json', '_chapters_index.json') or not f.stem.isdigit():
+                continue
+            try:
+                d = json.loads(f.read_text(encoding='utf-8'))
+            except Exception:
+                continue
+            content = d.get('content', '') or ''
+            if 'https://' not in content:
+                continue
+            wr_id = int(f.stem)
+            lines = content.split('\n')
+            new_lines = []
+            for line in lines:
+                m = _re.match(r'^!\[(\d+)\]\((https?://[^\s\)]+)\)$', line.strip())
+                if not m:
+                    new_lines.append(line)
+                    continue
+                idx = int(m.group(1))
+                url = m.group(2)
+                ext = Path(url.split('?')[0]).suffix.lower()
+                if ext not in ('.jpg', '.jpeg', '.webp', '.png'):
+                    ext = '.jpg'
+                target = images_base / str(wr_id) / f"{idx:04d}{ext}"
+                if target.exists():
+                    new_lines.append(f"![{idx}](/api/webtoon_images/{wr_id}/{target.name})")
+                    continue
+                checked += 1
+                try:
+                    req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
+                    r = urllib.request.urlopen(req, timeout=25)
+                    data = r.read()
+                    if len(data) >= 1000:
+                        target.parent.mkdir(parents=True, exist_ok=True)
+                        target.write_bytes(data)
+                        new_lines.append(f"![{idx}](/api/webtoon_images/{wr_id}/{target.name})")
+                        fixed += 1
+                        log.info(f"  ↻ 웹툰 이미지 복구: {wr_id}/{idx:04d}")
+                        continue
+                except Exception:
+                    pass
+                new_lines.append(line)
+            if new_lines != lines:
+                d['content'] = '\n'.join(new_lines)
+                f.write_text(json.dumps(d, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
+    if checked:
+        log.info(f"웹툰 실패 이미지 재시도: {checked}개 확인, {fixed}개 복구")
+    return {"checked": checked, "fixed": fixed}
+
+
 def _collect_webtoon(wr_id: int, item: dict) -> tuple[bool, str, str, Optional[int]]:
     """웹툰 회차 수집: 챕터 이미지를 로컬 다운로드 후 markdown 본문으로 저장.
 
@@ -1546,6 +1614,11 @@ def main():
                             _auto_discover()
                         except Exception as e:
                             log.warning(f"auto-discover 실패: {e}")
+                        # 실패한 웹툰 이미지 재다운로드 체크 (CDN 복구 대비)
+                        try:
+                            retry_failed_webtoon_images()
+                        except Exception as e:
+                            log.warning(f"웹툰 이미지 재시도 실패: {e}")
                     else:
                         pass
 

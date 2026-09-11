@@ -32,21 +32,22 @@ export default function NovelClient({
   const [page, setPage] = useState(focusPage ?? requestedPage);
   const [jumpInput, setJumpInput] = useState("");
   const [jumpError, setJumpError] = useState<string | null>(null);
-  const [pendingJumpChapter, setPendingJumpChapter] = useState<number | null>(initialFocus);
+  const pendingJumpRef = useRef<number | null>(initialFocus);
+  const [jumpNonce, setJumpNonce] = useState(0);
   const chapterListRef = useRef<HTMLDivElement>(null);
 
   const totalPages = Math.ceil(chapters.length / PAGE_SIZE);
   const startIdx = (page - 1) * PAGE_SIZE;
   const paginatedChapters = chapters.slice(startIdx, startIdx + PAGE_SIZE);
 
-  // Scroll to pending jump target after render
+  // Scroll to pending jump target after render (ref 기반 — setState-in-effect 회피)
   useEffect(() => {
-    if (pendingJumpChapter == null) return;
-    const el = document.getElementById(`chapter-${pendingJumpChapter}`);
-    if (!el) return;
-    el.scrollIntoView({ behavior: "smooth", block: "center" });
-    setPendingJumpChapter(null);
-  }, [pendingJumpChapter, page]);
+    const target = pendingJumpRef.current;
+    if (target == null) return;
+    const el = document.getElementById(`chapter-${target}`);
+    if (el) el.scrollIntoView({ behavior: "smooth", block: "center" });
+    pendingJumpRef.current = null;
+  }, [jumpNonce, page]);
 
   // Sync page to URL
   useEffect(() => {
@@ -78,7 +79,8 @@ export default function NovelClient({
     }
     const targetPage = Math.floor(idx / PAGE_SIZE) + 1;
     setJumpInput("");
-    setPendingJumpChapter(n);
+    pendingJumpRef.current = n;
+    setJumpNonce((x) => x + 1);
     setPage(targetPage);
   }
 

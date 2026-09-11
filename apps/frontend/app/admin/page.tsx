@@ -1,12 +1,13 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useSyncExternalStore } from "react";
 import Link from "next/link";
+import { getServerSnapshot, getSnapshot, signIn, signOut, subscribe } from "@/lib/adminAuth";
 
 const ADMIN_PASSWORD = "01074604416";
 
 export default function AdminPage() {
-  const [authenticated, setAuthenticated] = useState(false);
+  const authenticated = useSyncExternalStore(subscribe, getSnapshot, getServerSnapshot);
   const [loginPw, setLoginPw] = useState("");
   const [loginError, setLoginError] = useState(false);
 
@@ -81,13 +82,6 @@ export default function AdminPage() {
       eta_seconds?: number | null;
     }>;
   } | null>(null);
-  // Check sessionStorage on mount
-  useEffect(() => {
-    if (sessionStorage.getItem("admin_auth") === "1") {
-      setAuthenticated(true);
-    }
-  }, []);
-
   // Poll pipeline status whenever authenticated
   useEffect(() => {
     if (!authenticated) return;
@@ -112,9 +106,8 @@ export default function AdminPage() {
   function handleLogin(e: React.FormEvent) {
     e.preventDefault();
     if (loginPw === ADMIN_PASSWORD) {
-      setAuthenticated(true);
       setLoginError(false);
-      sessionStorage.setItem("admin_auth", "1");
+      signIn();
     } else {
       setLoginError(true);
     }
@@ -198,7 +191,7 @@ export default function AdminPage() {
             ← 라이브러리로 돌아가기
           </Link>
           <button
-            onClick={() => { setAuthenticated(false); sessionStorage.removeItem("admin_auth"); }}
+            onClick={() => { signOut(); }}
             className="text-sm text-gray-500 dark:text-gray-400 hover:underline"
           >
             로그아웃

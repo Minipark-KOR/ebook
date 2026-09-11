@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback, useRef, useEffect } from "react";
+import { useState, useRef, useEffect } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { ChapterDetail } from "@/lib/api";
@@ -29,18 +29,6 @@ export default function ChapterClient({
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [navOpen]);
-
-  const goPrev = useCallback(() => {
-    if (chapter?.prevChapter) {
-      router.push(`/novel/${novelId}/chapter/${chapter.prevChapter}`);
-    }
-  }, [chapter, novelId, router]);
-
-  const goNext = useCallback(() => {
-    if (chapter?.nextChapter) {
-      router.push(`/novel/${novelId}/chapter/${chapter.nextChapter}`);
-    }
-  }, [chapter, novelId, router]);
 
   function buildListHref(focusChapter: number): string {
     const params = new URLSearchParams();
@@ -141,6 +129,7 @@ export default function ChapterClient({
           {chapter.images && chapter.images.length > 0 && (
             <div className="mt-8 leading-none">
               {chapter.images.map((imgUrl: string, idx: number) => (
+                // eslint-disable-next-line @next/next/no-img-element -- 삽화는 임의 원격 호스트/미지정 크기라 next/image 부적합
                 <img
                   key={idx}
                   src={imgUrl}
@@ -232,7 +221,7 @@ export default function ChapterClient({
             onClick={(e) => {
               e.stopPropagation();
               if (chapter.nextChapter) {
-                window.location.href = `/novel/${novelId}/chapter/${chapter.nextChapter}`;
+                router.push(`/novel/${novelId}/chapter/${chapter.nextChapter}`);
               } else {
                 setNavOpen(false);
                 navOpenRef.current = false;

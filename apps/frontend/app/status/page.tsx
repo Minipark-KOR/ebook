@@ -1,12 +1,13 @@
-import { BackupItem, fmtKST, getJSONFresh, Incident, PortalSummary } from "@/lib/server";
+import { BackupItem, fmtKST, getJSON, Incident, PortalSummary } from "@/lib/server";
 
-export const dynamic = "force-dynamic";
+// ISR: 엣지 캐시 (최대 60s stale).
+export const revalidate = 60;
 
 export default async function StatusPage() {
   const [summary, incidents, backups] = await Promise.all([
-    getJSONFresh<PortalSummary>("/portal/summary"),
-    getJSONFresh<{ items: Incident[] }>("/portal/incidents?limit=20"),
-    getJSONFresh<{ items: BackupItem[] }>("/portal/backups?limit=10"),
+    getJSON<PortalSummary>("/portal/summary", 60),
+    getJSON<{ items: Incident[] }>("/portal/incidents?limit=20", 60),
+    getJSON<{ items: BackupItem[] }>("/portal/backups?limit=10", 60),
   ]);
 
   const inc = incidents?.items || [];

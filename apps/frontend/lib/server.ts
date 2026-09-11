@@ -49,11 +49,20 @@ export function fmtKST(iso?: string | null): string {
   });
 }
 
+export interface NewsHeadline {
+  id: number;
+  title: string;
+  title_ko?: string;
+  source?: string;
+  date?: string;
+}
+
 export interface PortalSummary {
   status: string;
   time: string;
   open_incidents: number;
   last_backup: { name: string; size: number; time: string } | null;
+  news?: NewsHeadline[];
 }
 
 export interface Incident {

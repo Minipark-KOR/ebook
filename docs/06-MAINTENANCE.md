@@ -144,6 +144,21 @@ python3 /opt/workspace/ebooklib/scripts/pipeline.py check-dupes 화산귀환 --f
 - `--fix`: 본문 표기를 진실값으로 재정렬 + 중복 제거. 충돌(같은 화수를 다른 내용이 주장) 시 스킵+보고.
 - collect 시에도 동일한 감지/더처가 자동 적용됨 (중복 저장 방지)
 
+### 3-2. 누락 화수 추적/재처리
+
+```bash
+# 빠진 화수 감지 → missing.json 기록
+python3 /opt/workspace/ebooklib/scripts/pipeline.py check-gaps [소설명]
+
+# 누락/빈 챕터를 소스에서 재발견 → 큐 재등록 (정확한 wr_id)
+python3 /opt/workspace/ebooklib/scripts/pipeline.py retry-missing [소설명] [--dry-run]
+```
+
+- `missing.json`에 `gap`(누락)/`empty_source`(사이트에 본문 없음) 유형으로 추적
+- 월간 사이클이 자동으로 check-gaps 실행 (추적 갱신)
+- **현재 소스에 없는 화수** (예: 화산귀환 1807, 1342/1345 / 바바리안 911)는
+  **toki31(유료 프록시) 폴백**으로만 수집 가능 — `discover_toki31` 에피소드 맵으로 재큐 필요
+
 ## 데이터 작업
 
 ### 4. 챕터 직접 추가

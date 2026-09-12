@@ -1773,6 +1773,170 @@ def run_check_duplicates(novel_filter: Optional[str] = None, fix: bool = False) 
     return stats
 
 
+MISSING_FILE = WATCHER_DIR / 'missing.json'
+
+
+def _load_missing() -> dict:
+    """missing.json 로드 (소설별 빠진 화수 목록)."""
+    if MISSING_FILE.exists():
+        try:
+            d = json.loads(MISSING_FILE.read_text(encoding="utf-8"))
+            return d if isinstance(d, dict) else {}
+        except Exception:
+            return {}
+    return {}
+
+
+def _save_missing(missing: dict) -> None:
+    """missing.json 저장."""
+    try:
+        MISSING_FILE.write_text(json.dumps(missing, ensure_ascii=False, indent=2), encoding="utf-8")
+    except Exception as e:
+        log.warning(f"missing.json 저장 실패: {e}")
+
+
+def run_check_gaps(novel_filter: Optional[str] = None) -> dict:
+    """소설별 빠진 화수(챕터 번호 누락) 감지 → missing.json 기록.
+
+    - 1~최대화수 사이에서 저장되지 않은 화수와 큐에 없는 화수를 누락으로 판정
+    - DLQ의 "빈 챕터"는 reason="empty_source", 그 외는 reason="gap"
+    사용법:
+      pipeline.py check-gaps            # 전체 감지
+      pipeline.py check-gaps 화산귀환    # 특정 소설
+    """
+    from lib.paths import iter_novel_dirs, resolve_novel_dir
+
+    targets = []
+    if novel_filter:
+        nid = novel_filter.replace(' ', '_').replace('/', '_')
+        for mt, nd in iter_novel_dirs():
+            if nd.name == nid:
+                targets.append(nd)
+                break
+        if not targets:
+            nd = resolve_novel_dir(nid)
+            if nd.exists():
+                targets.append(nd)
+    else:
+        targets = [nd for mt, nd in iter_novel_dirs()]
+
+    queue = _load_queue()
+    queue_chapters: dict[str, set] = {}
+    for it in queue:
+        nt = (it.get('novel_title') or '').replace(' ', '_').replace('/', '_')
+        queue_chapters.setdefault(nt, set()).add(it.get('chapter'))
+
+    # DLQ에서 빈 챕터 확인
+    dlq_empty: dict[int, str] = {}
+    if DLQ_FILE.exists():
+        try:
+            for r in json.loads(DLQ_FILE.read_text(encoding="utf-8")):
+                if '빈 챕터' in (r.get('error') or ''):
+                    dlq_empty[r.get('wr_id')] = r.get('chapter')
+        except Exception:
+            pass
+
+    missing = _load_missing()
+    changed = False
+    for nd in targets:
+        novel_id = nd.name
+        chs = set()
+        for f in nd.glob("*.json"):
+            if f.name in ("meta.json", "_chapters_index.json") or not f.stem.isdigit():
+                continue
+            try:
+                ch = json.load(open(f, encoding='utf-8')).get('chapter')
+                if isinstance(ch, int) and ch > 0:
+                    chs.add(ch)
+            except Exception:
+                pass
+        if not chs:
+            continue
+        max_ch = max(chs)
+        queued = queue_chapters.get(novel_id, set())
+        novel_missing = {}
+        for c in range(1, max_ch + 1):
+            if c in chs or c in queued:
+                continue
+            reason = "empty_source" if c in set(dlq_empty.values()) else "gap"
+            novel_missing[str(c)] = {
+                "reason": reason,
+                "detected_at": datetime.now(timezone.utc).isoformat(),
+            }
+        if novel_missing != (missing.get(novel_id) or {}):
+            missing[novel_id] = novel_missing
+            changed = True
+    if changed:
+        _save_missing(missing)
+
+    print(f"감지 완료 — 빠진 화수 소설 {sum(1 for v in missing.values() if v)}개")
+    for nid, mm in missing.items():
+        if not mm:
+            continue
+        reasons = {}
+        for c, info in mm.items():
+            reasons[info.get('reason', 'gap')] = reasons.get(info.get('reason', 'gap'), 0) + 1
+        print(f"  {nid}: {len(mm)}개 ({reasons})")
+        gap_chs = [int(c) for c, info in mm.items() if info.get('reason') == 'gap']
+        empty_chs = [int(c) for c, info in mm.items() if info.get('reason') == 'empty_source']
+        if gap_chs:
+            print(f"    누락(gap): {sorted(gap_chs)[:20]}{' ...' if len(gap_chs) > 20 else ''}")
+        if empty_chs:
+            print(f"    빈 챕터(source): {sorted(empty_chs)}")
+    return missing
+
+
+def run_retry_missing(novel_filter: Optional[str] = None, dry_run: bool = False) -> int:
+    """missing.json의 빠진 화수를 재발견 → 큐 재등록 (정확한 wr_id로).
+
+    누락/빈 챕터를 소스에서 다시 discover해 올바른 wr_id로 큐에 넣는다.
+    (wr_id를 화수로 위조하지 않음 — 소스 페이지에서 실제 wr_id를 찾는다)
+
+    사용법:
+      pipeline.py retry-missing                # 전체
+      pipeline.py retry-missing 화산귀환        # 특정 소설
+      pipeline.py retry-missing --dry-run      # 대상 소설 미리보기
+    """
+    from lib.paths import resolve_novel_dir
+
+    missing = _load_missing()
+    re_discovered = 0
+    for nid, mm in missing.items():
+        if novel_filter and novel_filter.replace(' ', '_').replace('/', '_') != nid:
+            continue
+        if not mm:
+            continue
+        nd = resolve_novel_dir(nid)
+        meta = {}
+        if nd.exists() and (nd / 'meta.json').exists():
+            try:
+                meta = json.loads((nd / 'meta.json').read_text(encoding='utf-8'))
+            except Exception:
+                pass
+        source = meta.get('source') or 'bookto31'
+        main_wr_id = meta.get('main_wr_id')
+        title = meta.get('title') or nid.replace('_', ' ')
+        if dry_run:
+            log.info(f"  [dry] {nid}: {len(mm)}화 재발견 대상 (source={source}, main_wr_id={main_wr_id})")
+            continue
+        if not main_wr_id:
+            log.warning(f"  {nid}: main_wr_id 없음 — discover 불가 (수동으로 wr_id 지정 필요)")
+            continue
+        # gnuboard(bookto31 계열)만 자동 재발견 지원
+        from lib.sources import get_discover
+        if get_discover(source) != "gnuboard":
+            log.warning(f"  {nid}: source={source}는 자동 재발견 미지원 (수동 필요)")
+            continue
+        log.info(f"  ↻ {nid}: 재발견 시작 ({len(mm)}화 누락)")
+        try:
+            added = run_discover(main_wr_id, title, source=source, max_pages=200)
+            re_discovered += added
+        except Exception as e:
+            log.warning(f"  {nid} 재발견 실패: {e}")
+    log.info(f"재발견 완료: {re_discovered}건 큐에 추가")
+    return re_discovered
+
+
 def _set_chapter_field(file_path: Path, chapter: int) -> None:
     """챕터 JSON의 chapter/제목 필드를 갱신 (재정렬용)."""
     import re as _re
@@ -1977,6 +2141,22 @@ def main():
         novel_filter = next((a for a in args if not a.startswith("--")), None)
         run_check_duplicates(novel_filter, fix=fix)
 
+    elif cmd == "check-gaps":
+        """소설별 빠진 화수 감지 → missing.json 기록.
+        사용법: pipeline.py check-gaps [소설명]
+        """
+        novel_filter = sys.argv[2] if len(sys.argv) > 2 else None
+        run_check_gaps(novel_filter)
+
+    elif cmd == "retry-missing":
+        """missing.json의 빠진 화수를 소스에서 재발견 → 큐 재등록.
+        사용법: pipeline.py retry-missing [소설명] [--dry-run]
+        """
+        args = sys.argv[2:]
+        dry_run = "--dry-run" in args
+        novel_filter = next((a for a in args if not a.startswith("--")), None)
+        run_retry_missing(novel_filter, dry_run=dry_run)
+
     elif cmd == "epub":
         """EPUB 캐시 제작/재제작 (수동).
         사용법: pipeline.py epub [novel_id ...]   (인자 없으면 전체 소설)
@@ -2069,6 +2249,11 @@ def main():
                             retry_failed_webtoon_images()
                         except Exception as e:
                             log.warning(f"웹툰 이미지 재시도 실패: {e}")
+                        # 누락 화수 추적 갱신 (missing.json) — 소스가 채워진 누락/빈 챕터 파악
+                        try:
+                            run_check_gaps()
+                        except Exception as e:
+                            log.warning(f"check-gaps 실패: {e}")
                     else:
                         pass
 

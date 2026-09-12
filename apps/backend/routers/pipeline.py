@@ -55,11 +55,15 @@ def parse_url(url: str) -> Tuple[Optional[str], Optional[str], Optional[str]]:
     각 소스별 ID 추출 패턴은 소스 특성에 따라 분기:
       - bookto31(GNUBOARD): wr_id=N (+ bo_table)
       - toki31(newtoki): /novel/{id}
-    bo_table: gnuboard 게시판(콘텐츠 종류) — discover/collect에서 그대로 사용.
+    bo_table: gnuboard 게시판(콘텐츠 종류) — URL의 bo_table을 그대로 사용.
     Returns:
         (source, id, bo_table) 또는 (None, None, None)
     """
     from lib.sources import get_source_from_url, get_discover
+
+    # 프로토콜 없이 호스트만 입력된 경우 자동 추가
+    if url and not url.startswith(("http://", "https://")):
+        url = "https://" + url
 
     source = get_source_from_url(url)
     if not source:
@@ -101,7 +105,7 @@ def _extract_title(source: str, wr_id: str, bo_table: str = "novel") -> str:
     return f"소설 {wr_id}"
 
 
-def _run_pipeline_job(source: str, novel_id: str, bo_table: str = "novel") -> None:
+def _run_pipeline_job(source: str, novel_id: str, bo_table: str = "novel", preset_title: str = "") -> None:
     """백그라운드: 제목 추출 → discover 큐 등록 → loop 시작."""
     script = str(PIPELINE_SCRIPT)
     job_key = f"{bo_table or 'novel'}:{novel_id}"
@@ -111,8 +115,11 @@ def _run_pipeline_job(source: str, novel_id: str, bo_table: str = "novel") -> No
             if job_key in _JOBS:
                 _JOBS[job_key].update(kw)
 
-    _update(status="제목 추출 중")
-    title = _extract_title(source, novel_id, bo_table)
+    if preset_title:
+        title = preset_title
+    else:
+        _update(status="제목 추출 중")
+        title = _extract_title(source, novel_id, bo_table)
     _update(title=title)
 
     _update(status="회차 탐색 중")
@@ -365,6 +372,7 @@ def get_progress() -> dict:
 class StartPipelineRequest(BaseModel):
     password: str
     url: str
+    title: str = ""
 
 
 class StartPipelineResponse(BaseModel):
@@ -429,13 +437,13 @@ async def start_pipeline(req: StartPipelineRequest):
             "source": source,
             "novel_id": novel_id,
             "bo_table": bo_table,
-            "title": "",
+            "title": req.title or "",
             "status": "시작 중",
             "message": "",
         }
 
     # 4. 백그라운드 실행 후 즉시 응답
-    threading.Thread(target=_run_pipeline_job, args=(source, novel_id, bo_table), daemon=True).start()
+    threading.Thread(target=_run_pipeline_job, args=(source, novel_id, bo_table, req.title), daemon=True).start()
 
     return StartPipelineResponse(
         ok=True,

@@ -12,6 +12,7 @@ export default function AdminPage() {
   const [loginError, setLoginError] = useState(false);
 
   const [url, setUrl] = useState("");
+  const [manualTitle, setManualTitle] = useState("");
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState<{
     ok: boolean;
@@ -126,7 +127,7 @@ export default function AdminPage() {
       const res = await fetch("/api/pipeline/start", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ password: ADMIN_PASSWORD, url }),
+        body: JSON.stringify({ password: ADMIN_PASSWORD, url, title: manualTitle }),
       });
       const data = await res.json();
       if (!res.ok) {
@@ -224,6 +225,23 @@ export default function AdminPage() {
             />
             <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
               등록된 소스(sources.json)의 작품 URL을 입력하세요
+            </p>
+          </div>
+
+          <div>
+            <label htmlFor="manualTitle" className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+              제목 (선택)
+            </label>
+            <input
+              id="manualTitle"
+              type="text"
+              value={manualTitle}
+              onChange={(e) => setManualTitle(e.target.value)}
+              placeholder="비워두면 자동 추출 (실패 시 빈 값)"
+              className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+            />
+            <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+              자동 추출이 안 되면 소설 제목을 직접 입력하세요
             </p>
           </div>
 

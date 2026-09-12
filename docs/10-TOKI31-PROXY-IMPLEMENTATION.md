@@ -492,17 +492,20 @@ def test_toki31_chapter_with_proxy():
 - **toki31 접근**: DataImpulse로만 성공. MaskProxy는 Page.goto 타임아웃(불안정)
 
 ### 6.2 수집 실측 (화산귀환 3회차 테스트)
-- **웜 회차 평균 ~0.18MB** (콜드 ~0.94MB / 웜 184~186KB) — 50GB ≈ 27만 회차 수용
+- **웜 회차 평균 ~0.19MB** (콜드 ~0.75~0.94MB / 웜 184~190KB) — 50GB ≈ 27만 회차 수용
 - toki31의 JS 청크(~840KB)와 ad_guard_bg.wasm(403KB)는 **로컬 캐시 재서빙**으로 절약:
   - 첫 요청만 `route.fetch()` 실다운로드 → 메모리 캐시 → 이후 `route.fulfill` 0네트워크 재서빙
   - **사전 검증**: 동일 URL JS 내용 해시가 챕터 간 전부 안정(불안정 0/22) → 캐시 안전
+  - **확인**: gzip 응답을 `route.fetch→fulfill`로 재서빙해도 JS 정상 실행(라이브 검증 성공)
 - 남는 비용: document(HTML ~165KB) + novel-content API(~24KB) — 필수, 차단 불가
 - **회차 트래픽 상한** (안전장치, JS/wasm 캐시 이후 타이트닝):
-  - 콜드 **1.5MB** (정상 ~0.94MB) / 웜 **0.8MB** (정상 ~0.18MB)
+  - 콜드 **1.5MB** (정상 ~0.75~0.94MB) / 웜 **0.8MB** (정상 ~0.19MB)
   - `TOKI31_CHAPTER_COLD_MAX_MB` / `TOKI31_CHAPTER_WARM_MAX_MB`
   - novel-content 페이로드 상한 60KB (`TOKI31_CONTENT_MAX_KB`)
 - **트래픽 실측**: 캐시 재서빙 응답(route.fulfill)은 requestStart=-1이라 timing 판정 불가
   → URL 마커(wasm)/`_js_cache_hits`(JS)로 계상 제외
+  - wasm 첫 1회 실다운로드도 마커로 미계상 (세션당 ~403KB 과소계상 — 무시 가능 수준)
+  - 캐시 메모리 `_js_cache`/`_wasm_cache` ~1MB 유지 (수명 누적, 브라우저 재시작에도 유지)
 
 ### 6.3 등장 작품의 toki31 novel_id
 | 작품 | toki31 novel_id | 비고 |

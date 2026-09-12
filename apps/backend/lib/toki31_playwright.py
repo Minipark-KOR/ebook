@@ -57,7 +57,11 @@ _BLOCKED_RESOURCE_TYPES = ("image", "font", "media", "stylesheet")
 
 # 트래커/광고 도메인 → 차단 (본문 추출과 무관, 네트워크 절약)
 # 실측: whoas.xyz/live/track.js 등. 정확한 매칭으로 오차단 방지.
-_TRACKER_DOMAINS = ("whoas.xyz",)
+_TRACKER_DOMAINS = (
+    "whoas.xyz",
+    "www.googletagmanager.com",
+    "www.google-analytics.com",
+)
 
 # ad_guard_bg.wasm(403KB/회차, 사이트 anti-adblock): 차단하면 본문 추출이 실패하므로
 # **차단하지 않고 로컬 캐시로 재서빙**한다 (첫 회차 1회 다운로드 → 이후 0 네트워크).

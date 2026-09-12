@@ -70,12 +70,14 @@ _RESET_AFTER_CONSECUTIVE_FAILURES = 3
 
 # 안전장치 한도 (환경변수로 오버라이드)
 # - novel-content API 페이로드 상한 (정상 ~24KB, 60KB 초과 시 비정상으로 판단)
-# - 회차당 총 트래픽 상한: 사이트가 JS/wasm을 매 챕터 재다운로드(anti-bot)하므로
-#   콜드 ~1.3MB / 웜 ~1.6MB가 정상. 상한은 "비정상 대용량" 안전장치로
-#   정상 챕터를 차단하지 않도록 넉넉히(콜드 2.5MB / 웜 2MB) 잡는다.
+# - 회차당 총 트래픽 상한: JS/wasm 로컬 캐시 재서빙 이후 실측
+#   콜드(첫 로드) ~0.94MB / 웜(캐시 히트) ~0.18MB가 정상.
+#   상한은 "비정상 대용량" 안전장치로 정상 대비 여유를 두되, 캐시 전처럼
+#   재다운로드 시대의 느슨한 값(2.5/2.0MB)보다 타이트하게 잡는다.
+#   (캐시 미스로 JS를 일부 재다운로드해도 웜 0.8MB 안에서 수용)
 _NOVEL_CONTENT_MAX_BYTES = int(float(os.getenv('TOKI31_CONTENT_MAX_KB', '60'))) * 1024
-_CHAPTER_COLD_MAX_BYTES = int(float(os.getenv('TOKI31_CHAPTER_COLD_MAX_MB', '2.5')) * 1024 * 1024)
-_CHAPTER_WARM_MAX_BYTES = int(float(os.getenv('TOKI31_CHAPTER_WARM_MAX_MB', '2.0')) * 1024 * 1024)
+_CHAPTER_COLD_MAX_BYTES = int(float(os.getenv('TOKI31_CHAPTER_COLD_MAX_MB', '1.5')) * 1024 * 1024)
+_CHAPTER_WARM_MAX_BYTES = int(float(os.getenv('TOKI31_CHAPTER_WARM_MAX_MB', '0.8')) * 1024 * 1024)
 
 
 def _load_proxy_env():

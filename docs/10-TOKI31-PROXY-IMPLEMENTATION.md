@@ -497,8 +497,9 @@ def test_toki31_chapter_with_proxy():
   - 첫 요청만 `route.fetch()` 실다운로드 → 메모리 캐시 → 이후 `route.fulfill` 0네트워크 재서빙
   - **사전 검증**: 동일 URL JS 내용 해시가 챕터 간 전부 안정(불안정 0/22) → 캐시 안전
 - 남는 비용: document(HTML ~165KB) + novel-content API(~24KB) — 필수, 차단 불가
-- **회차 트래픽 상한** (안전장치, 정상 챕터 차단 방지):
-  - 콜드 **2.5MB** / 웜 **2.0MB** (`TOKI31_CHAPTER_COLD_MAX_MB` / `TOKI31_CHAPTER_WARM_MAX_MB`)
+- **회차 트래픽 상한** (안전장치, JS/wasm 캐시 이후 타이트닝):
+  - 콜드 **1.5MB** (정상 ~0.94MB) / 웜 **0.8MB** (정상 ~0.18MB)
+  - `TOKI31_CHAPTER_COLD_MAX_MB` / `TOKI31_CHAPTER_WARM_MAX_MB`
   - novel-content 페이로드 상한 60KB (`TOKI31_CONTENT_MAX_KB`)
 - **트래픽 실측**: 캐시 재서빙 응답(route.fulfill)은 requestStart=-1이라 timing 판정 불가
   → URL 마커(wasm)/`_js_cache_hits`(JS)로 계상 제외

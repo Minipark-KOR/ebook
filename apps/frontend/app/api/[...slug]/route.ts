@@ -14,6 +14,9 @@ async function proxyToDevforge(req: NextRequest, slug: string[]): Promise<NextRe
   if (origin) headers['Origin'] = origin;
   const referer = req.headers.get('referer');
   if (referer) headers['Referer'] = referer;
+  // JSON 본문 파싱을 위해 Content-Type 전달 (없으면 백엔드가 body를 문자열로 받아 422)
+  const contentType = req.headers.get('content-type');
+  if (contentType) headers['Content-Type'] = contentType;
 
   try {
     const res = await fetch(url, {

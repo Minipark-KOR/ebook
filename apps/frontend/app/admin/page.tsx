@@ -130,7 +130,11 @@ export default function AdminPage() {
       });
       const data = await res.json();
       if (!res.ok) {
-        setResult({ ok: false, message: data.detail || `HTTP ${res.status}` });
+        // Pydantic 422 등 detail이 배열이면 문자열로 변환 (React 크래시 방지)
+        const detail = Array.isArray(data.detail)
+          ? data.detail.map((d: { msg?: string }) => d.msg || JSON.stringify(d)).join(" / ")
+          : data.detail || `HTTP ${res.status}`;
+        setResult({ ok: false, message: detail });
       } else {
         setResult(data);
       }

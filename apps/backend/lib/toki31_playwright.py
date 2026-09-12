@@ -590,6 +590,19 @@ def get_traffic_total_bytes() -> int:
     return _collector._traffic_total if _collector else 0
 
 
+def get_collector_state() -> dict:
+    """현재 collector 상태 (트래픽 분석용)."""
+    if not _collector:
+        return {"is_cold": True, "traffic_total": 0, "js_cache": 0, "wasm_cache": 0, "js_hits": 0}
+    return {
+        "is_cold": _collector._is_cold,
+        "traffic_total": _collector._traffic_total,
+        "js_cache": len(_collector._js_cache),
+        "wasm_cache": len(_collector._wasm_cache),
+        "js_hits": len(_collector._js_cache_hits),
+    }
+
+
 def fetch_chapter_content_full(
     novel_id: str,
     chapter_id: str,

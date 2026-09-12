@@ -1056,7 +1056,7 @@ def _run_collect_locked(limit: int = 0, source_filter: str = "") -> dict:
     """
     from lib.sources import get_traffic_limited
     from lib.traffic_guard import reset_if_new_day, is_exceeded, add_bytes, summary
-    from lib.toki31_playwright import get_traffic_total_bytes
+    from lib.toki31_playwright import get_traffic_total_bytes, get_collector_state
 
     # 트래픽 가드 적용 여부 — 특정 소스 필터 시 그 소스가 유료 프록시인지에 따라.
     # source_filter가 없으면(전체) 유료 소스 포함 가능 → 가드 적용.
@@ -1170,8 +1170,17 @@ def _run_collect_locked(limit: int = 0, source_filter: str = "") -> dict:
                 time.sleep(2)
         fetch_elapsed = time.monotonic() - _t0
         traffic_delta = get_traffic_total_bytes() - traffic_before
+        cs = get_collector_state() if source == "toki31" else {}
+        state_tag = "콜드" if cs.get("is_cold") else "웜"
         if traffic_delta > 0:
             add_bytes(traffic_delta, chapter=True)
+            log.info(
+                f"  📊 트래픽: {traffic_delta / 1024:.1f}KB [{state_tag}] "
+                f"(누적 {summary()['used_mb']:.1f}MB/{summary()['daily_limit_mb']}MB) "
+                f"JS캐시={cs.get('js_cache',0)} hit={cs.get('js_hits',0)} wasm={cs.get('wasm_cache',0)}"
+            )
+        elif traffic_delta == 0 and success:
+            log.info(f"  📊 트래픽: 0KB [{state_tag}] (전체 캐시 히트)")
 
         if not success:
             body_len = len(body[1]) if isinstance(body, tuple) and len(body) == 2 else len(body or "")
@@ -1270,7 +1279,15 @@ def _run_collect_locked(limit: int = 0, source_filter: str = "") -> dict:
     # 동시에 실행된 discover가 추가한 항목을 보존하기 위해 디스크 최신 상태에 델타 적용.
     remaining_queue = [q for q in full_queue if q['wr_id'] not in removed_ids]
     _merge_into_queue(remove_ids=removed_ids)
+    s = summary()
     log.info(f"collect 완료: {processed}개 처리, {len(remaining_queue)}개 남음")
+    cs = get_collector_state() if (not source_filter or source_filter == "toki31") else {}
+    avg = s['used_mb'] / max(1, s['chapters']) if s['chapters'] else 0
+    log.info(
+        f"  📊 트래픽 요약: {s['used_mb']:.1f}MB / {s['daily_limit_mb']}MB "
+        f"({s['chapters']}화, 화당 평균 {avg:.2f}MB)"
+        + (f" | JS캐시={cs.get('js_cache',0)} hit={cs.get('js_hits',0)} wasm={cs.get('wasm_cache',0)}" if cs else "")
+    )
 
     # EPUB 제작/재제작 — 이번에 queue가 비워진(전체 회차 수집 완료) 소설만
     _build_epub_for_drained_novels(remaining_queue, touched_novels)

@@ -413,11 +413,11 @@ def discover_toki31(novel_id: int, novel_title: str = "", dry_run: bool = False)
 
     def _fetch_episodes(only_title: bool = False):
         env = _load_proxy_env()
-        # 프록시 우선순위: MaskProxy(저렴) → DataImpulse(백업)
-        proxy_user = env.get("MASKPROXY_USER", "") or env.get("DATAIMPULSE_USER", "")
-        proxy_pass = env.get("MASKPROXY_PASS", "") or env.get("DATAIMPULSE_PASS", "")
-        proxy_host = env.get("MASKPROXY_HOST", "") or env.get("DATAIMPULSE_HOST", "")
-        proxy_port = env.get("MASKPROXY_PORT", "") or env.get("DATAIMPULSE_PORT", "")
+        # 프록시 우선순위: DataImpulse(한국 IP 지원) → MaskProxy(백업)
+        proxy_user = env.get("DATAIMPULSE_USER", "") or env.get("MASKPROXY_USER", "")
+        proxy_pass = env.get("DATAIMPULSE_PASS", "") or env.get("MASKPROXY_PASS", "")
+        proxy_host = env.get("DATAIMPULSE_HOST", "") or env.get("MASKPROXY_HOST", "")
+        proxy_port = env.get("DATAIMPULSE_PORT", "") or env.get("MASKPROXY_PORT", "")
         if "dataimpulse" in proxy_host and "__cr." not in proxy_user:
             proxy_user = proxy_user + "__cr.kr"
         if not proxy_user or not proxy_pass:

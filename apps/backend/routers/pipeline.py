@@ -115,11 +115,8 @@ def _run_pipeline_job(source: str, novel_id: str, bo_table: str = "novel", prese
             if job_key in _JOBS:
                 _JOBS[job_key].update(kw)
 
-    if preset_title:
-        title = preset_title
-    else:
-        _update(status="제목 추출 중")
-        title = _extract_title(source, novel_id, bo_table)
+    _update(status="제목 추출 중")
+    title = _extract_title(source, novel_id, bo_table)
     _update(title=title)
 
     _update(status="회차 탐색 중")
@@ -445,7 +442,7 @@ async def start_pipeline(req: StartPipelineRequest):
             "source": source,
             "novel_id": novel_id,
             "bo_table": bo_table,
-            "title": req.title or "",
+            "title": "",
             "status": "시작 중",
             "message": "",
             "started_at": now,

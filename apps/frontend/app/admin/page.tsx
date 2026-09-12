@@ -373,6 +373,29 @@ export default function AdminPage() {
             </>
           );
         })()}
+
+        {/* 리셋 버튼 */}
+        <div className="mt-6">
+          <button
+            onClick={async () => {
+              if (!confirm("진행 중인 작업을 초기화하시겠습니까?")) return;
+              try {
+                const res = await fetch("/api/pipeline/reset", {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({ password: ADMIN_PASSWORD }),
+                });
+                const data = await res.json();
+                alert(data.message);
+              } catch (e) {
+                alert("리셋 실패: " + e);
+              }
+            }}
+            className="px-4 py-2 bg-red-600 text-white rounded hover:bg-red-700 text-sm"
+          >
+            작업 초기화
+          </button>
+        </div>
       </div>
     </div>
   );

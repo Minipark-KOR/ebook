@@ -420,9 +420,17 @@ async def start_pipeline(req: StartPipelineRequest):
         )
     log.info("pipeline/start 파싱 완료: url=%s → source=%s id=%s bo=%s", req.url, source, novel_id, bo_table)
 
-    # 3. 중복 시작 방지
+    # 3. 중복 시작 방지 + 고정 작업 자동 제거 (5분 초과)
     with _JOBS_LOCK:
         job_key = f"{bo_table or 'novel'}:{novel_id}"
+        now = time.time()
+        stale_keys = [
+            k for k, v in _JOBS.items()
+            if v.get("started_at") and now - v["started_at"] > 300 and v["status"] != "완료"
+        ]
+        for k in stale_keys:
+            log.info(f"고정된 작업 자동 제거: {k}")
+            del _JOBS[k]
         if job_key in _JOBS and _JOBS[job_key]["status"] != "완료":
             return StartPipelineResponse(
                 ok=True,
@@ -440,6 +448,7 @@ async def start_pipeline(req: StartPipelineRequest):
             "title": req.title or "",
             "status": "시작 중",
             "message": "",
+            "started_at": now,
         }
 
     # 4. 백그라운드 실행 후 즉시 응답
@@ -474,3 +483,13 @@ async def pipeline_status():
         "current_job": current_job,
         "jobs": jobs,
     }
+
+
+@router.post("/pipeline/reset")
+async def pipeline_reset(password: str = ""):
+    """진행 중인 작업 초기화."""
+    if password != ADMIN_PASSWORD:
+        return {"ok": False, "message": "비밀번호 오류"}
+    with _JOBS_LOCK:
+        _JOBS.clear()
+    return {"ok": True, "message": "작업이 초기화되었습니다"}

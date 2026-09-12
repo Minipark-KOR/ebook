@@ -45,8 +45,8 @@ def _toki_base() -> str:
     """최신 toki31 base_url (도메인 자동 전환 반영)."""
     return get_base_url("toki31")
 
-# 프록시 우선순위: MaskProxy(저렴, $0.87/GB) → DataImpulse(백업, $1/GB)
-_PROXY_PRIORITY = ("maskproxy", "dataimpulse")
+# 프록시 우선순위: DataImpulse(주력, 충전분 소모) → MaskProxy(폴백)
+_PROXY_PRIORITY = ("dataimpulse", "maskproxy")
 _PROXY_DEFAULTS = {
     "maskproxy": ("MASKPROXY", "gw.maskproxy.io", "1288"),
     "dataimpulse": ("DATAIMPULSE", "gw.dataimpulse.com", "823"),
@@ -261,6 +261,17 @@ class Toki31Collector:
         async def _on_response(response):
             # 트래픽 실측: content-length 우선, 없으면 body 크기 (리소스 차단 후
             # 남는 응답은 HTML/JS/API뿐이라 프록시 과금 바이트의 좋은 근사)
+            # 캐시 히트(디스크/메모리)는 네트워크 바이트가 0이므로 집계 제외 —
+            # 안 그러면 브라우저 재사용 시 JS 재다운로드가 실제보다 크게 잡혀
+            # 웜 상한을 오초과해 정상 챕터가 차단된다.
+            try:
+                tm = response.request.timing
+                if tm:
+                    dur = tm.get('responseStart', 0) - tm.get('requestStart', 0)
+                    if dur < 1:  # ~0ms = 캐시 히트
+                        return
+            except Exception:
+                pass
             try:
                 cl = response.headers.get('content-length')
                 if cl and cl.isdigit():

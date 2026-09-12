@@ -387,6 +387,9 @@ async def start_pipeline(req: StartPipelineRequest):
     if req.password != ADMIN_PASSWORD:
         raise HTTPException(status_code=403, detail="비밀번호가 일치하지 않습니다")
 
+    # 제출 URL 기록 (도메인 수시 변경 추적/분석용)
+    log.info("pipeline/start 요청 URL: %s", req.url)
+
     # 2. URL 파싱
     source, novel_id, bo_table = parse_url(req.url)
     if not source or not novel_id:
@@ -396,15 +399,18 @@ async def start_pipeline(req: StartPipelineRequest):
             from lib.domain_router import detect_and_register_source
             registered = detect_and_register_source(req.url)
             if registered:
+                log.info("미등록 도메인 자동 등록 성공: %s → %s", req.url, registered)
                 source, novel_id, bo_table = parse_url(req.url)
         except Exception:
             pass
     if not source or not novel_id:
         # 도메인은 자주 바뀌므로 목록을 명시하지 않는다 (sources.json 기준 자동 판정)
+        log.warning("pipeline/start URL 파싱 실패: %s", req.url)
         raise HTTPException(
             status_code=400,
             detail="지원하지 않는 URL 형식입니다. sources.json에 등록된 도메인의 작품 URL이어야 합니다.",
         )
+    log.info("pipeline/start 파싱 완료: url=%s → source=%s id=%s bo=%s", req.url, source, novel_id, bo_table)
 
     # 3. 중복 시작 방지
     with _JOBS_LOCK:

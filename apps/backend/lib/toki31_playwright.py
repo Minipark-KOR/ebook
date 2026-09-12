@@ -215,6 +215,8 @@ class Toki31Collector:
         self._traffic_total = 0  # 프록시로 받은 총 응답 바이트 (실측, 수명 누적)
         self._is_cold = True  # 브라우저 첫 로드 여부 (JS 번들 전체 다운로드 → 상한 높게)
         self._wasm_cache = {}  # ad_guard_bg.wasm url → bytes (챕터 간 재서빙)
+        self._js_cache = {}  # JS 청크 url → bytes (검증: 동일 URL 내용 안정)
+        self._js_cache_hits = set()  # 캐시로 재서빙된 JS url (계상 제외용)
         self._resolve_proxy()
 
     # --- 프록시 ---
@@ -282,6 +284,9 @@ class Toki31Collector:
             # timing 기반 캐시 판정이 안 되므로 URL로 직접 제외.
             if _WASM_CACHE_URL_MARKER in response.url:
                 return
+            # 캐시로 재서빙된 JS도 0 네트워크 → 계상 제외
+            if response.url in self._js_cache_hits:
+                return
             try:
                 tm = response.request.timing
                 if tm:
@@ -344,7 +349,27 @@ class Toki31Collector:
             await route.abort()
             return
 
-        # 2) ad_guard_bg.wasm — 첫 다운로드 후 캐시 재서빙
+        # 2) JS 청크 — 첫 다운로드 후 로컬 캐시 재서빙 (0 네트워크)
+        #    (검증: 동일 URL의 내용은 챕터 간 안정 — 캐시 안전)
+        if resource_type == "script":
+            cached = self._js_cache.get(url)
+            if cached is not None:
+                self._js_cache_hits.add(url)
+                await route.fulfill(
+                    status=200,
+                    content_type="application/javascript",
+                    body=cached,
+                )
+                return
+            try:
+                resp = await route.fetch()
+                self._js_cache[url] = await resp.body()
+                await route.fulfill(response=resp)
+                return
+            except Exception:
+                pass
+
+        # 3) ad_guard_bg.wasm — 첫 다운로드 후 캐시 재서빙
         if _WASM_CACHE_URL_MARKER in url:
             cached = self._wasm_cache.get(url)
             if cached is not None:

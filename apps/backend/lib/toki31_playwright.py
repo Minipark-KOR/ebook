@@ -303,9 +303,16 @@ class Toki31Collector:
             try:
                 cl = response.headers.get('content-length')
                 if cl and cl.isdigit():
-                    self._traffic_total += int(cl)
+                    size = int(cl)
                 else:
-                    self._traffic_total += len(await response.body())
+                    size = len(await response.body())
+                self._traffic_total += size
+                # 응답별 트래픽 상세 로깅 (50KB 이상 또는 API 응답)
+                if size > 50 * 1024 or '/api/' in response.url:
+                    logger.info(
+                        f"    📡 {response.status} {response.resource_type} "
+                        f"{size/1024:.1f}KB {response.url[:100]}"
+                    )
             except Exception:
                 pass
             if '/api/novel-content' in response.url:

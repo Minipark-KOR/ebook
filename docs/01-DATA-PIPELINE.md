@@ -7,7 +7,7 @@
 ```
 [외부 소스]                    [수집]                  [저장]                 [API]
 ─────────                  ─────────              ───────────           ────────────
-북토끼 (bookto31.com)      ─┐
+북토끼 (23.ondobook.net)  ─┐
                             │
 뉴토끼 (toki31.com)        ─┼─→  pipeline.py collect  ─→  /opt/ai_data/  ─→  FastAPI
                             │       (source별 분기)        flaresolverr/       (3ms)
@@ -25,7 +25,7 @@
 - URL: `https://miniebook.vercel.app/admin`
 - 비밀번호 입력 + URL 붙여넣기
 - 자동 분기: **소스 레지스트리(`sources.json`)의 domains로 URL 매칭** → source/ID 추출
-  - bookto31.com → bookto31, toki31.com/newtoki31.com → toki31, 그 외 등록 도메인
+  - 23.ondobook.net → bookto31, toki31.com/newtoki31.com → toki31, 그 외 등록 도메인
 - 제목 자동 추출 → 큐 등록 → 루프 시작 (루프는 소스 무관, 모든 소스 수집)
 
 ### CLI
@@ -53,16 +53,19 @@ python3 scripts/pipeline.py revalidate "오늘만 사는 기사"
 
 ```json
 {
-  "bookto31": { "domains": ["bookto31.com"], "base_url": "https://bookto31.com",
+  "bookto31": { "domains": ["23.ondobook.net"], "base_url": "https://23.ondobook.net",
                 "collector": "bookto31", "discover": "gnuboard", "speed_hint_sec": 300 },
   "toki31":   { "domains": ["toki31.com", "newtoki31.com"], "base_url": "https://toki31.com",
                 "collector": "toki31", "discover": "toki31_episodes", "speed_hint_sec": 5 }
 }
 ```
 
-- `domains`: URL 매칭, `base_url`: 크롤링 주소 (도메인 변경 시 여기만 수정), `collector`: 수집기 키,
+- `domains`: URL 매칭 + **미러 후보**, `base_url`: 크롤링 주소, `collector`: 수집기 키,
   `discover`: 발견 전략(gnuboard/toki31_episodes/...), `speed_hint_sec`: 수집 딜레이/ETA 기준
-- 도메인이 바뀌면(북토끼가 bookto42.com으로) `domains`/`base_url`만 수정
+- **도메인 변경은 대부분 자동 처리** — 리다이렉트 최종 URL 감지/페일오버 시 `base_url`·`domains`를
+  `lib/domain_router.py`가 자동 갱신. **이전 URL은 폐기**(새 호스트만 유지)
+- ⚠️ 사이트 도메인이 바뀌면 **wr_id 체계도 달라질 수 있음** (예: bookto31→ondobook). 기존 소설의
+  `meta.main_wr_id`는 discover 실행 시 소스에서 자동 재발견됨
 
 ### Step 1: discover (소스별 전략 분기)
 
@@ -96,6 +99,14 @@ html = fetch_chapter(wr_id)            # FlareSolverr → Cloudflare 우회
 body = parse_chapter_body(html)        # GNUBOARD5 본문 추출
 chapter_num = _extract_chapter_from_html(html) # "<title>제목 - 839화</title>" 패턴
 ```
+
+> **중복 본문 방지 (collect 저장 전)**: 같은 본문이 다른 화수로 저장되는 것을 차단
+> - **동일 본문 해시 검출**: `_saved_content_hash_index()`로 같은 내용이 이미 다른 chapter 번호로
+>   저장돼 있으면 → 저장 생략 + `duplicates.json` 기록 + 큐에서 제거
+> - **챕터 번호 보정**: 본문 표기("N화")가 기대 chapter와 다르고 충돌이 없으면 저장 단계에서 본문 표기 우선
+>   (소스 wr_id→화수 매핑 오프바이원 대응)
+> - **소스 무관 dedup**: `_load_saved_chapters()`가 chapter 번호 기준으로 저장 여부 확인
+>   (bookto31/toki31/ondobook wr_id 체계가 달라도 동일 화수는 재다운로드 안 함)
 
 **newtoki 수집기**:
 ```python
@@ -145,7 +156,7 @@ result = await fetch_chapter_content_full(novel_id, episode_id)
   "title": "하남자의 탑 공략법 - 1화",
   "content_length": 5804,
   "content": "1화\n2004년.\n지구 곳곳에 거대한 검은 탑...",
-  "url": "https://bookto31.com/...",
+  "url": "https://23.ondobook.net/...",
   "collected_at": "2026-09-01T09:26:51+09:00",
   "source": "bookto31"
 }

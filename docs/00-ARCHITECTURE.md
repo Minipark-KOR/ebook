@@ -7,7 +7,7 @@
 ebooklib은 한국 웹소설을 자동으로 수집 → JSON 저장 → EPUB으로 묶어 → 웹에서 읽고 다운로드할 수 있게 하는 **모노레포 시스템**입니다.
 
 ### 핵심 기능
-1. **수집**: Cloudflare 보호 사이트(북토끼/bookto31.com, 뉴토끼/toki31.com)에서 챕터 본문 크롤링
+1. **수집**: Cloudflare 보호 사이트(북토끼/23.ondobook.net, 뉴토끼/toki31.com)에서 챕터 본문 크롤링
 2. **저장**: 챕터를 JSON 파일로 `/opt/ai_data/flaresolverr/novels/` 에 저장
 3. **읽기**: Next.js 프론트엔드에서 챕터 단위로 표시 (ISR로 CDN 캐시)
 4. **EPUB**: 전체 소설을 하나의 EPUB 파일로 묶어서 다운로드 제공 (한글 폰트 임베드)
@@ -112,7 +112,7 @@ COLLECTORS = {
         │
 [3] devforge FastAPI
         ├─ 비밀번호 검증
-        ├─ URL 파싱 (bookto31.com → bookto31, toki31.com → newtoki)
+        ├─ URL 파싱 (23.ondobook.net → bookto31, toki31.com → newtoki)
         ├─ discover --dry-run → 제목 자동 추출
         ├─ discover → wr_id 큐 등록
         └─ loop 시작 (없으면)
@@ -141,8 +141,9 @@ COLLECTORS = {
 │   │   │   ├── metadata.py          # 메타데이터 검색
 │   │   │   └── metadata_namu.py     # namu.wiki 메타데이터
 │   │   └── lib/                     # 공통 레이어
+│   │       ├── domain_router.py     # 도메인 자동 전환/감지 (리다이렉트·페일오버·헬스체크)
 │   │       ├── flaresolverr_client.py # FlareSolverr 세션 관리
-│   │       ├── sources.py           # 소스 레지스트리 (sources.json 로드/검증)
+│   │       ├── sources.py           # 소스 레지스트리 (sources.json 로드/검증 + base_url 자동 갱신)
 │   │       ├── storage.py           # 챕터 저장/메타 관리
 │   │       ├── toki31_playwright.py # 뉴토끼 Playwright 추출기
 │   │       └── rate_limiter.py      # SQLite rate limiter
@@ -209,7 +210,7 @@ COLLECTORS = {
           │                        │
           ▼                        ▼
 ┌────────────────────┐    ┌──────────────────┐
-│ bookto31.com       │    │ toki31.com       │
+│ 23.ondobook.net    │    │ toki31.com       │
 │ (Cloudflare)       │    │ (CloudFront+AES) │
 └────────────────────┘    └──────────────────┘
 ```
@@ -285,7 +286,7 @@ COLLECTORS = {
 ### 외부 의존성
 - **FlareSolverr** - 헤드리스 브라우저 - **북토끼 우회**
 - **Playwright** - 브라우저 자동화 - **뉴토끼 우회**
-- **북토끼** (bookto31.com) - **챕터 본문** SSOT
+- **북토끼** (23.ondobook.net) - **챕터 본문** SSOT
 - **뉴토끼** (toki31.com) - **챕터 본문** 대체 소스
 - **namu.wiki** - **메타데이터** + **표지 이미지**
 - **문피아** (munpia.com) - **출판사** 정보

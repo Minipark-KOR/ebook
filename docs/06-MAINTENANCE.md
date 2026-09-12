@@ -125,6 +125,25 @@ for wr_id, _ in empty:
             print(f"  ✓ {wr_id}: {len(body)} chars")
 ```
 
+### 3-1. 중복 본문 / 챕터 번호 불일치 확인·수리
+
+```bash
+# 전체 소설 감지 (보고만)
+python3 /opt/workspace/ebooklib/scripts/pipeline.py check-dupes
+
+# 특정 소설 감지
+python3 /opt/workspace/ebooklib/scripts/pipeline.py check-dupes 화산귀환
+
+# 감지 + 자동 수리 (재정렬/중복 제거, 변경분 _dupe_backup_* 백업, 인덱스 재구축)
+python3 /opt/workspace/ebooklib/scripts/pipeline.py check-dupes 화산귀환 --fix
+```
+
+- 감지 대상:
+  - **동일 본문이 다른 화수(chapter 번호)로 중복 저장**된 경우 (예: 13921.json ↔ 12000.json)
+  - **본문 표기("N화")와 저장 chapter 번호가 다른 경우** (소스 wr_id→화수 매핑 오프바이원)
+- `--fix`: 본문 표기를 진실값으로 재정렬 + 중복 제거. 충돌(같은 화수를 다른 내용이 주장) 시 스킵+보고.
+- collect 시에도 동일한 감지/더처가 자동 적용됨 (중복 저장 방지)
+
 ## 데이터 작업
 
 ### 4. 챕터 직접 추가
@@ -143,7 +162,7 @@ chapter_data = {
     "title": "소설 제목 - 1화",
     "content_length": 5804,
     "content": "본문 내용...",
-    "url": "https://bookto31.com/bbs/board.php?bo_table=novel&wr_id=21431",
+    "url": "https://23.ondobook.net/bbs/board.php?bo_table=novel&wr_id=21431",
     "collected_at": "2026-09-05T00:00:00+09:00",
     "user_agent": "Mozilla/5.0 ..."
 }

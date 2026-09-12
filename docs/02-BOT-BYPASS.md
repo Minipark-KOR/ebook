@@ -9,7 +9,7 @@
 
 | 대상 사이트 | 차단 유형 | 우회 방법 | 비용 |
 |---|---|---|---|
-| bookto31.com (북토끼) | Cloudflare Turnstile | FlareSolverr (헤드리스 브라우저) | 무료 (셀프호스팅) |
+| 23.ondobook.net (북토끼) | Cloudflare Turnstile | FlareSolverr (헤드리스 브라우저) | 무료 (셀프호스팅) |
 | toki31.com (뉴토끼) | CloudFront ASN + KR_ONLY | curl_cffi TLS 위장 + Residential proxy | 무료 (단, 불안정) |
 | miniebook.vercel.app | Vercel 기본 보안 | 없음 (정상 API) | - |
 
@@ -56,6 +56,12 @@ journalctlctl --user -u container-flaresolverr.service -f
 curl http://127.0.0.1:8191/health
 ```
 
+> ⚠️ **사이트 도메인 변경 시 wr_id 체계도 달라질 수 있음**
+> - bookto31.com → 23.ondobook.net 이동 시 **wr_id 재매핑** 확인 필요
+>   (예: bookto31의 화산귀환 wr_id=12000은 ondobook에서 다른 소설, ondobook 화산귀환 = wr_id=4419)
+> - ondobook 본문 div는 `view-content` **단독 클래스** → `parse_chapter_body`가
+>   `view-content book-text-viewer` + `view-content` 모두 지원 (2026-09-12 보완)
+
 ### 1.5 bookto31.py 통합
 ```python
 # lib/flaresolverr_client.py의 FlareSolverrSession 사용
@@ -64,7 +70,7 @@ from lib.flaresolverr_client import FlareSolverrSession
 _fs = FlareSolverrSession(rate_limit=True)
 
 def fetch_chapter(wr_id: int) -> Optional[str]:
-    return _fs.fetch(f"https://bookto31.com/bbs/board.php?bo_table=novel&wr_id={wr_id}")
+    return _fs.fetch(f"https://23.ondobook.net/bbs/board.php?bo_table=novel&wr_id={wr_id}")
 ```
 
 ### 1.6 FlareSolverr 응답 형식
@@ -74,9 +80,9 @@ def fetch_chapter(wr_id: int) -> Optional[str]:
   "message": "Challenge solved!",
   "solution": {
     "status": 200,
-    "url": "https://bookto31.com/...",
+    "url": "https://23.ondobook.net/...",
     "cookies": [
-      {"name": "cf_clearance", "value": "...", "domain": ".bookto31.com"},
+      {"name": "cf_clearance", "value": "...", "domain": ".23.ondobook.net"},
       {"name": "PHPSESSID", "value": "..."}
     ],
     "userAgent": "Mozilla/5.0 ...",

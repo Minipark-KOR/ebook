@@ -205,14 +205,14 @@
 
 **요청 본문**:
 ```json
-{ "url": "https://bookto31.com/bbs/board.php?bo_table=novel&wr_id=25575", "password": "..." }
+{ "url": "https://23.ondobook.net/bbs/board.php?bo_table=novel&wr_id=25575", "password": "..." }
 ```
 
 **URL → 소스 자동 분기** (소스 레지스트리 `sources.json`의 `domains` 매칭):
 
 | URL | source | ID |
 |---|---|---|
-| `bookto31.com/...wr_id=N` | bookto31 | N |
+| `23.ondobook.net/...wr_id=N` | bookto31 | N |
 | `toki31.com/novel/N` | toki31 | N |
 | `newtoki31.com/novel/N` | toki31 | N |
 | 기타 등록 도메인 | sources.json 기준 | - |

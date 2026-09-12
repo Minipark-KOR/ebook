@@ -25,16 +25,20 @@ ebook-watcher.service            ← Type=notify, WatchdogSec=1800, Restart=on-w
 | `bookto31` | 300초 (Cloudflare 보호) | 5~8분 |
 | `toki31` | 5초 (내부 딜레이 스킵) | **15~30초** |
 
-> **다중 소스**: 루프는 source 무관하게 모든 소스 수집. toki31은 유동 IP 회전으로 고속. 소스 추가/도메인 변경은 sources.json.
+> **다중 소스**: 루프는 source 무관하게 모든 소스 수집. toki31은 유동 IP 회전으로 고속.
+> **도메인 변경 자동 처리**: `lib/domain_router.py`가 리다이렉트 감지/페일오버로 `sources.json`을 자동 갱신
+> (이전 URL 폐기), 30분 간격 헬스체크로 도메인 사망 시 자동 전환 → `status.json#domain_health`에 기록.
 
 ### 실행 흐름
 
 ```
 1 Cycle:
   ├─ sd_notify (systemd watchdog 신호)
+  ├─ 도메인 헬스체크 (30분 간격, bookto31=FlareSolverr 실응답 / toki31=DNS)
   ├─ collect (1개 챕터)
   │   ├─ bookto31: FlareSolverr → HTML → 본문 추출 (~12초)
   │   └─ toki31: Playwright + KR 프록시 → API 복호화 (~15~30초)
+  ├─ 중복 본문/챕터 번호 감지 (저장 전, 자동 더처: 생략+기록+큐 제거)
   ├─ EPUB 제작 훅 (해당 소설 queue가 비워진 경우)
   └─ 사이클 대기 (bookto31 300초 / toki31 5초)
 ```

@@ -2,7 +2,51 @@
 
 > ebooklib의 모든 주요 변경 사항. 최신이 위.
 
-## 2026-09-10 (최신)
+## 2026-09-12 (최신)
+
+### 북토끼 도메인 변경: bookto31.com → 23.ondobook.net
+- **북토끼가 23.ondobook.net으로 주소 변경** → `sources.json`/`lib/sources.py`의 `base_url`·`domains` 갱신
+- **주의**: ondobook은 bookto31.com과 **DB/wr_id 체계가 다름** (wr_id가 재매핑됨)
+  - 예: bookto31의 화산귀환 main_wr_id=12000 → ondobook에서 다른 소설. ondobook 화산귀환 = wr_id=4419
+  - 기존 소설의 `meta.main_wr_id`는 discover 실행 시 자동 갱신됨 (소스별 wr_id 재발견)
+- **ondobook 본문 파서 보완**: ondobook 본문 div가 `view-content` 단독 클래스
+  → `_extract_book_text_viewer`가 `view-content book-text-viewer` + `view-content` 모두 지원
+
+### 도메인 자동 전환/감지 시스템 (`lib/domain_router.py` 신규)
+- **리다이렉트 최종 URL 감지**: 요청 후 응답 최종 URL의 호스트가 다르면 `sources.json`의 `base_url` 자동 갱신
+  - FlareSolverr `sol.url`, toki31 Playwright `page.url`, discover의 `pg.url` 모두 연동
+  - 리다이렉트가 사라져도 새 주소로 계속 동작
+- **미러 도메인 페일오버**: `candidate_bases()`가 base_url → domains 목록 순회, 현재 도메인 사망 시 자동 전환
+- **이전 URL 폐기**: `update_base_url(discard_old=True)` — 도메인이 넘어가면 이전 URL은 `domains`에서 제거(새 호스트만 유지)
+- **도메인 헬스체크** (loop 30분 간격):
+  - bookto31: FlareSolverr 홈 실응답 / toki31: DNS 확인 (유료 트래픽 절약)
+  - 사망 → 자동 페일오버, 결과는 `status.json#domain_health`·`domain_status.json`에 기록
+  - **FlareSolverr 자체 다운 시 "unknown" 판정** (사이트 다운 오판 방지)
+- `sources.json` 갱신은 `.bak` 백업 후 원자적 쓰기
+
+### 중복 본문 감지/처리 (재다운로드/중복 저장 방지 강화)
+- **동일 본문 해시 검출** (collect 저장 전): 같은 본문이 다른 화수(chapter 번호)로 저장돼 있으면
+  → **저장 생략 + `duplicates.json` 기록 + 큐에서 제거** (더처)
+- **챕터 번호 오프바이원 자동 보정**: 본문 표기("N화")가 저장 chapter와 다르고 충돌 없으면
+  저장 단계에서 본문 표기 우선 (소스 wr_id→화수 매핑 오류 대응)
+- **`pipeline.py check-dupes [소설] [--fix]`**: 기존 데이터 감지 + 수리
+  - 감지: 동일 본문이 다른 화수로 저장된 중복, 본문 표기와 저장 chapter 불일치
+  - `--fix`: 챕터 재정렬 + 중복 제거, 변경/삭제 파일 `_dupe_backup_*`로 백업, 인덱스 재구축
+
+### 화산귀환 데이터 수리 (오프바이원 115건 + 중복 1건)
+- **원인**: bookto31의 `wr_id N`이 실제 **(N+1)화** 본문 반환 (discover 매핑 오프바이원)
+- **수리**: 13807~13921(115건) 챕터 번호를 본문 표기 기준으로 재정렬 (13807→1808 … 13920→1921)
+  - `13921.json`(ch1921로 표기, 실제 1922화) = `12000.json`(ch1922)과 동일 본문 → 중복 제거(백업)
+- **결과**: 1808~1922 연속. 단 **1807화는 원래 누락**이었음이 드러남
+  (toki31 1806까지, bookto31 1808부터 — 현 소스로 재수집 불가)
+
+### FlareSolverr(svc pod) 포트 포워딩 이슈
+- **증상**: 컨테이너는 running인데 `127.0.0.1:8191`(및 8000/8002/8085) 호스트 접근 불가
+  → svc pod의 pasta 포트포워딩 프로세스 소실 (netns 재생성 문제)
+- **해결**: `podman pod restart svc` (또는 `systemctl --user restart svc-pod container-flaresolverr`)로 복구
+- **영향**: 복구 전까지 bookto31 크롤링 불가 + devforge-mcp(8000) 접근 불가
+
+## 2026-09-10
 
 ### bookto31 본문 파싱 강화
 - **`parse_chapter_body`**: 단순 `.*?</div>` → **중첩 div 안전 추출** (`_extract_book_text_viewer`)

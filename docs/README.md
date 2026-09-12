@@ -24,9 +24,10 @@ ebooklib = 웹소설 크롤러 (파이프라인) → JSON 저장 → FastAPI →
 ```
 
 ### 핵심 파일
-- `scripts/pipeline.py` - 파이프라인 전부 (discover/collect/enrich/index/revalidate/loop)
+- `scripts/pipeline.py` - 파이프라인 전부 (discover/collect/enrich/index/revalidate/loop/check-dupes)
 - `apps/backend/services/epub.py` - EPUB 생성 (4개 한글 폰트 임베드)
 - `apps/backend/services/bookto31.py` - 북토끼 크롤러 (FlareSolverrSession)
+- `apps/backend/lib/domain_router.py` - 도메인 자동 전환/감지 (리다이렉트·페일오버·헬스체크)
 - `apps/backend/lib/rate_limiter.py` - 8분 + ±2분 jitter
 - `apps/backend/lib/toki31_playwright.py` - 뉴토끼 Playwright + AES-GCM 복호화
 - `apps/backend/lib/storage.py` - 챕터 저장/메타 관리

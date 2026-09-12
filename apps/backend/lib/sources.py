@@ -20,10 +20,14 @@ sources.json 형식:
 """
 
 import json
+import logging
 from pathlib import Path
 from typing import Optional
+from urllib.parse import urlparse
 
 from pydantic import BaseModel, Field
+
+logger = logging.getLogger(__name__)
 
 _SOURCES_FILE = Path(__file__).resolve().parent.parent / "sources.json"
 
@@ -98,8 +102,6 @@ def load_sources() -> dict[str, SourceConfig]:
 
 def get_source_from_url(url: str) -> Optional[str]:
     """URL 호스트로 소스 키 찾기. (URL_PATTERNS 대체)"""
-    from urllib.parse import urlparse
-
     host = (urlparse(url).hostname or "").lower()
     for key, cfg in load_sources().items():
         for domain in cfg.domains:
@@ -114,6 +116,56 @@ def get_base_url(source: str) -> str:
     if cfg:
         return cfg.base_url
     return f"https://{source}.com"
+
+
+def update_base_url(source: str, new_base_url: str) -> bool:
+    """소스의 base_url을 sources.json에 영속화 (백업 + 원자적 쓰기).
+
+    사이트 도메인 변경(리다이렉트 감지/페일오버) 시 자동 갱신용.
+    신규 호스트는 domains 맨 앞에도 추가해 후보/매칭에 포함시킨다.
+    실패(소스 없음/형식 오류) 시 False, 무변경/성공 시 True.
+    """
+    new_base_url = (new_base_url or "").rstrip("/")
+    try:
+        host = (urlparse(new_base_url).hostname or "").lower()
+    except Exception:
+        return False
+    if not host:
+        return False
+
+    raw: dict = {}
+    if _SOURCES_FILE.exists():
+        try:
+            raw = json.loads(_SOURCES_FILE.read_text(encoding="utf-8"))
+            if not isinstance(raw, dict):
+                raw = {}
+        except Exception:
+            raw = {}
+    if source not in raw:
+        logger.warning("update_base_url: 소스 %s 없음 — 갱신 생략", source)
+        return False
+
+    old = raw[source].get("base_url")
+    if old == new_base_url:
+        return True
+
+    raw[source]["base_url"] = new_base_url
+    domains = raw[source].get("domains", [])
+    if host not in domains:
+        raw[source]["domains"] = [host] + list(domains)
+
+    try:
+        if _SOURCES_FILE.exists():
+            _SOURCES_FILE.rename(_SOURCES_FILE.with_suffix(".json.bak"))
+        _SOURCES_FILE.write_text(
+            json.dumps(raw, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        logger.info("sources.json 갱신: [%s] base_url %s → %s", source, old, new_base_url)
+        return True
+    except Exception as e:
+        logger.warning("sources.json 쓰기 실패 (%s): %s", source, e)
+        return False
 
 
 def get_domains(source: str) -> list[str]:

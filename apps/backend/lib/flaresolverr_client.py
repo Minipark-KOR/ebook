@@ -50,8 +50,18 @@ class FlareSolverrSession:
         self._jitter = jitter
         self._db_path = db_path
 
-    def fetch(self, url: str, max_attempts: int = 3) -> Optional[str]:
-        """URL을 FlareSolverr로 요청, HTML 본문 반환. None이면 실패."""
+    def fetch(
+        self,
+        url: str,
+        max_attempts: int = 3,
+        source: Optional[str] = None,
+        timeout_ms: int = DEFAULT_TIMEOUT_MS,
+    ) -> Optional[str]:
+        """URL을 FlareSolverr로 요청, HTML 본문 반환. None이면 실패.
+
+        source가 주어지면 리다이렉트 최종 URL의 호스트가 요청 URL과 다를 때
+        sources.json의 base_url을 자동 갱신한다 (도메인 변경 대응).
+        """
         if self._rate_limit:
             wait_if_needed(
                 url,
@@ -62,7 +72,7 @@ class FlareSolverrSession:
         html = None
         for attempt in range(max_attempts):
             try:
-                sol = self._flaresolverr_request(url)
+                sol = self._flaresolverr_request(url, timeout_ms=timeout_ms)
             except Exception:
                 time.sleep(1)
                 continue
@@ -72,6 +82,9 @@ class FlareSolverrSession:
                 if self._rate_limit:
                     record_request(url, status=200, db_path=self._db_path)
                 html = sol.get("response") or ""
+                if source:
+                    from lib.domain_router import auto_update_base
+                    auto_update_base(source, url, sol.get("url"))
                 break
             time.sleep(2)
 

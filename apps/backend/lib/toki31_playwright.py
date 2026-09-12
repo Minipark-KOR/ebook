@@ -30,13 +30,20 @@ import re
 from typing import Optional, Tuple
 
 from lib.sources import get_base_url
+from lib.domain_router import auto_update_base, base_of, candidate_bases, update_base_url
 
 logger = logging.getLogger(__name__)
 
 # .env.local에서 프록시 설정 로드
 ENV_LOCAL = os.path.join(os.path.dirname(__file__), '..', '.env.local')
 
+# 하위 호환용 모듈 상수 — 실제 사용은 _toki_base()로 최신 base_url을 읽는다.
 TOKI31_BASE = get_base_url("toki31")
+
+
+def _toki_base() -> str:
+    """최신 toki31 base_url (도메인 자동 전환 반영)."""
+    return get_base_url("toki31")
 
 # 프록시 우선순위: MaskProxy(저렴, $0.87/GB) → DataImpulse(백업, $1/GB)
 _PROXY_PRIORITY = ("maskproxy", "dataimpulse")
@@ -345,7 +352,7 @@ class Toki31Collector:
         self._response_event.clear()
         self._content_payload.clear()
 
-        target_url = f"{TOKI31_BASE}/novel/{novel_id}/{chapter_id}"
+        target_url = f"{_toki_base().rstrip('/')}/novel/{novel_id}/{chapter_id}"
 
         # 페이지 로드 (재시도 포함)
         loaded = False
@@ -366,6 +373,28 @@ class Toki31Collector:
                 if attempt < 2:
                     await page.wait_for_timeout(3000)
 
+        # 현재 도메인 사망 가능성 → 미러 도메인(base_url 도메인 목록)으로 재시도
+        if not loaded and not fatal_proxy_error:
+            old_base = base_of(target_url)
+            for base in candidate_bases("toki31"):
+                if base == old_base:
+                    continue
+                alt_url = f"{base.rstrip('/')}/novel/{novel_id}/{chapter_id}"
+                try:
+                    resp = await page.goto(alt_url, wait_until="domcontentloaded", timeout=timeout_ms)
+                    if resp and resp.status == 200:
+                        loaded = True
+                        target_url = alt_url
+                        update_base_url("toki31", base)
+                        logger.warning(f"🔄 [toki31] 미러 페일오버: {old_base} → {base}")
+                        break
+                except Exception as e:
+                    msg = str(e)
+                    logger.warning(f"Mirror load failed ({base}): {msg}")
+                    if any(k in msg for k in ("ERR_PROXY", "PROXY_AUTH", "proxy authentication")):
+                        fatal_proxy_error = True
+                        break
+
         if not loaded:
             logger.error(f"Failed to load {target_url} after 3 attempts")
             if fatal_proxy_error:
@@ -377,6 +406,14 @@ class Toki31Collector:
             else:
                 self._consecutive_failures = 0
             return None
+
+        # 리다이렉트 최종 URL 감지 → sources.json base_url 자동 갱신
+        # (구 도메인이 새 도메인으로 301/302 리다이렉트하는 동안 이를 활용)
+        try:
+            resolved = page.url
+            auto_update_base("toki31", target_url, resolved)
+        except Exception:
+            pass
 
         self._consecutive_failures = 0
 

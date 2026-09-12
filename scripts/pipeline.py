@@ -118,6 +118,63 @@ def _add_to_dlq(item: dict, error: str) -> None:
         log.warning(f"DLQ 기록 실패: {e}")
 
 # ============================================================
+# 도메인 헬스체크 — 사이트 주소 변경 자동 감지/전환
+# ============================================================
+
+DOMAIN_CHECK_INTERVAL_SEC = 1800  # 30분 간격
+_last_domain_check = [0.0]
+
+
+def _probe_bookto31(base: str) -> Optional[bool]:
+    """bookto31 헬스체크용: 홈 페이지 실제 응답으로 생존 확인.
+
+    None이면 판별 불가 (FlareSolverr 인프라 다운).
+    """
+    from services.bookto31 import probe_base
+    return probe_base(base)
+
+
+def _check_domain_health_once() -> None:
+    """소스별 도메인 생존 확인. 사망 시 후보 도메인으로 자동 전환.
+
+    - bookto31: FlareSolverr 홈 페이지 실제 응답으로 확인 (rate limit 미적용)
+    - toki31: DNS 해석 여부만 확인 (유료 프록시 트래픽 절약)
+    결과는 status.json의 domain_health에 기록한다.
+    """
+    from lib.sources import list_sources
+    from lib.domain_router import check_domain_health
+
+    now = time.time()
+    if now - _last_domain_check[0] < DOMAIN_CHECK_INTERVAL_SEC:
+        return
+    _last_domain_check[0] = now
+
+    health = {}
+    for src in list_sources():
+        try:
+            probe_fn = _probe_bookto31 if src == "bookto31" else None
+            result = check_domain_health(src, probe_fn=probe_fn)
+            health[src] = {"status": result["status"], "base_url": result.get("base_url")}
+            if result["status"] != "ok":
+                log.warning(
+                    f"도메인 헬스 [{src}] {result['status']} "
+                    f"base_url={result.get('base_url')}"
+                )
+        except Exception as e:
+            log.warning(f"도메인 헬스체크 실패 [{src}]: {e}")
+    if health:
+        # 기존 status.json의 phase/cycle을 유지하며 domain_health만 병합
+        try:
+            merged = json.loads(STATUS_FILE.read_text(encoding="utf-8")) if STATUS_FILE.exists() else {}
+            if not isinstance(merged, dict):
+                merged = {}
+        except Exception:
+            merged = {}
+        merged["domain_health"] = health
+        _write_status(merged)
+
+
+# ============================================================
 # 수집기 레지스트리 — source별 collector 분기
 # ============================================================
 
@@ -336,7 +393,8 @@ def discover_toki31(novel_id: int, novel_title: str = "", dry_run: bool = False)
     저장되지 않은 에피소드를 wr_id=episode_id, source=toki31, novel_ref=novel_id로 큐잉한다.
     """
     import asyncio as _asyncio
-    from lib.toki31_playwright import _load_proxy_env, TOKI31_BASE
+    from lib.toki31_playwright import _load_proxy_env, _toki_base
+    from lib.domain_router import auto_update_base
 
     UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
           "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36")
@@ -369,8 +427,13 @@ def discover_toki31(novel_id: int, novel_title: str = "", dry_run: bool = False)
                     else:
                         await route.continue_()
                 await pg.route("**/*", _block)
-                await pg.goto("{}/novel/{}".format(TOKI31_BASE, novel_id), wait_until="domcontentloaded", timeout=60000)
+                await pg.goto("{}/novel/{}".format(_toki_base(), novel_id), wait_until="domcontentloaded", timeout=60000)
                 await pg.wait_for_timeout(2500)
+                # 리다이렉트 최종 URL 감지 → sources.json base_url 자동 갱신
+                try:
+                    auto_update_base("toki31", f"{_toki_base()}/novel/{novel_id}", pg.url)
+                except Exception:
+                    pass
                 title = (await pg.title()).split("|")[0].strip()
                 if only_title:
                     await b.close()
@@ -1600,9 +1663,23 @@ def main():
             while True:
                 cycle += 1
                 log.info(f"\n--- Cycle {cycle} ---")
-                _write_status({"phase": "loop", "cycle": cycle, "source": source or "all"})
+                # 기존 domain_health 등 필드는 유지하고 phase/cycle만 갱신
+                try:
+                    prev_status = json.loads(STATUS_FILE.read_text(encoding="utf-8")) if STATUS_FILE.exists() else {}
+                    if not isinstance(prev_status, dict):
+                        prev_status = {}
+                except Exception:
+                    prev_status = {}
+                prev_status.update({"phase": "loop", "cycle": cycle, "source": source or "all"})
+                _write_status(prev_status)
                 # systemd watchdog 신호 (WatchdogSec 대응)
                 _sd_notify(f"cycle {cycle}")
+
+                # 도메인 헬스체크 (30분 간격, 사이트 주소 변경 시 자동 전환)
+                try:
+                    _check_domain_health_once()
+                except Exception as e:
+                    log.warning(f"도메인 헬스체크 실패: {e}")
 
                 # 매월 1일 1회 연재작 새 회차 감지 (등록된 모든 소스)
                 today = datetime.now().strftime("%Y-%m")

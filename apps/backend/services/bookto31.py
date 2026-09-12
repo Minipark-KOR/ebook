@@ -24,25 +24,42 @@ from typing import Optional, List, Dict, Tuple
 
 from lib.flaresolverr_client import FlareSolverrSession
 from lib.sources import get_base_url
+from lib.domain_router import candidate_bases
 
 
 # bookto31 전용 FlareSolverr 세션 (rate_limit=True: 8분 간격)
 _fs = FlareSolverrSession(rate_limit=True)
 
+# 리다이렉트 감지/페일오버 시도용 짧은 타임아웃 (도메인 사망 시 빠른 전환)
+_PROBE_TIMEOUT_MS = 20000
+_DEFAULT_TIMEOUT_MS = 60000
 
-def _fetch_with_flaresolverr(url: str, max_attempts: int = 3, rate_limit: bool = True) -> Optional[str]:
+
+def _fetch_with_flaresolverr(
+    url: str,
+    max_attempts: int = 3,
+    rate_limit: bool = True,
+    source: Optional[str] = None,
+    timeout_ms: Optional[int] = None,
+) -> Optional[str]:
     """FlareSolverr 통해 URL의 HTML 본문을 가져온다. None이면 실패.
 
     rate_limit=True (기본): 8분 간격 + ±2분 jitter로 같은 URL 도배 방지.
-    rate_limit=False: 챕터 일괄 수집 시 이미 제한된 상태에서 호출.
+    rate_limit=False: 챕터 일괄 수집/헬스체크 시 이미 제한된 상태에서 호출.
+    source가 주어지면 리다이렉트 최종 도메인으로 base_url 자동 갱신.
 
     Note: 외부 모듈(ebook_worker.py 등)에서 아직 직접 호출할 수 있어 유지.
     """
+    timeout = timeout_ms if timeout_ms is not None else _DEFAULT_TIMEOUT_MS
     if rate_limit:
-        return _fs.fetch(url, max_attempts=max_attempts)
+        return _fs.fetch(
+            url, max_attempts=max_attempts, source=source, timeout_ms=timeout
+        )
     # rate_limit=False: 임시 세션으로 호출
     no_limit_fs = FlareSolverrSession(rate_limit=False)
-    return no_limit_fs.fetch(url, max_attempts=max_attempts)
+    return no_limit_fs.fetch(
+        url, max_attempts=max_attempts, source=source, timeout_ms=timeout
+    )
 
 
 def _site_url(source: str = "bookto31") -> str:
@@ -55,16 +72,74 @@ def _board_url(source: str, bo_table: str, wr_id: int) -> str:
     return f"{_site_url(source)}/bbs/board.php?bo_table={bo_table}&wr_id={wr_id}"
 
 
+def _fetch_page(
+    source: str,
+    path: str,
+    max_attempts: int = 3,
+    timeout_ms: Optional[int] = None,
+) -> Optional[str]:
+    """후보 도메인(base_url + 미러) 순회 fetch — 첫 성공 HTML 반환.
+
+    현재 도메인이 죽으면 다음 후보(domains 목록)로 자동 전환하고,
+    리다이렉트로 실제 도메인이 바뀌면 sources.json base_url을 자동 갱신한다.
+    """
+    for base in candidate_bases(source):
+        url = f"{base.rstrip('/')}{path}"
+        html = _fetch_with_flaresolverr(
+            url,
+            max_attempts=max_attempts,
+            source=source,
+            timeout_ms=timeout_ms,
+        )
+        if html is not None:
+            return html
+    return None
+
+
+def _flaresolverr_alive(timeout: float = 5.0) -> bool:
+    """FlareSolverr API 자체가 응답하는지 확인 (프로브 인프라 생존 여부)."""
+    import requests
+    try:
+        r = requests.post(
+            "http://127.0.0.1:8191/v1",
+            json={"cmd": "sessions.list"},
+            timeout=timeout,
+        )
+        return r.status_code == 200
+    except Exception:
+        return False
+
+
+def probe_base(base: str, timeout_ms: int = _PROBE_TIMEOUT_MS) -> Optional[bool]:
+    """단일 베이스 URL이 살아있는지 홈 페이지 응답으로 확인 (헬스체크용).
+
+    rate limit 미적용 + 짧은 타임아웃. FlareSolverr 헤드리스로 챌린지 해결 후
+    HTML이 돌아오면 True.
+
+    Returns:
+        True  — 사이트 응답 정상
+        False — 사이트 응답 불가
+        None  — 판별 불가 (FlareSolverr 자체가 죽어 있어 프로브 불가)
+    """
+    if not _flaresolverr_alive():
+        return None
+    url = f"{base.rstrip('/')}/"
+    html = _fetch_with_flaresolverr(
+        url, max_attempts=1, rate_limit=False, timeout_ms=timeout_ms
+    )
+    return html is not None
+
+
 def fetch_home(source: str = "bookto31") -> Optional[str]:
     """홈 페이지 (소스별 도메인)."""
-    return _fetch_with_flaresolverr(f"{_site_url(source)}/")
+    return _fetch_page(source, "/")
 
 
 def fetch_search(query: str, source: str = "bookto31") -> Optional[str]:
     """검색 결과 페이지 HTML."""
     import urllib.parse
     q = urllib.parse.quote(query)
-    return _fetch_with_flaresolverr(f"{_site_url(source)}/bbs/search.php?stx={q}")
+    return _fetch_page(source, f"/bbs/search.php?stx={q}")
 
 
 def fetch_novel_index(novel_id: int, source: str = "bookto31", bo_table: str = "novel") -> Optional[str]:
@@ -73,7 +148,7 @@ def fetch_novel_index(novel_id: int, source: str = "bookto31", bo_table: str = "
     GNUBOARD5 URL: /bbs/board.php?bo_table={bo_table}&wr_id={novel_id}
     여기서 novel_id는 wr_id (작품 페이지 ID). bo_table은 게시판(콘텐츠 종류).
     """
-    return _fetch_with_flaresolverr(_board_url(source, bo_table, novel_id))
+    return _fetch_page(source, f"/bbs/board.php?bo_table={bo_table}&wr_id={novel_id}")
 
 
 def fetch_chapter(wr_id: int, source: str = "bookto31", bo_table: str = "novel") -> Optional[str]:
@@ -82,7 +157,7 @@ def fetch_chapter(wr_id: int, source: str = "bookto31", bo_table: str = "novel")
     URL: /bbs/board.php?bo_table={bo_table}&wr_id={wr_id}
     wr_id는 회차(에피소드)의 ID. bo_table은 게시판(콘텐츠 종류).
     """
-    return _fetch_with_flaresolverr(_board_url(source, bo_table, wr_id))
+    return _fetch_page(source, f"/bbs/board.php?bo_table={bo_table}&wr_id={wr_id}")
 
 
 def parse_chapter_list(html: str, novel_id: int) -> List[Dict]:

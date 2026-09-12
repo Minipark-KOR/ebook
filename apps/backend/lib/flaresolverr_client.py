@@ -95,7 +95,7 @@ class FlareSolverrSession:
 
     def _flaresolverr_request(self, url: str, timeout_ms: int = DEFAULT_TIMEOUT_MS) -> Dict:
         """FlareSolverr로 URL 요청 → solution dict 반환."""
-        payload = {"cmd": "request.get", "url": url, "maxTimeout": timeout_ms}
+        payload = {"cmd": "request.get", "url": url, "maxTimeout": timeout_ms, "disableMedia": True}
         with self._lock:
             if self._session_id:
                 payload["session"] = self._session_id

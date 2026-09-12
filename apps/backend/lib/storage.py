@@ -21,6 +21,22 @@ from lib.paths import (
 )
 
 
+def _source_chapter_url(source: str, wr_id: int) -> str:
+    """챕터 출처 URL — sources.json의 현재 base_url 기준 (도메인 변경 반영).
+
+    이전엔 https://{source}.com 하드코딩이라 도메인 변경(bookto31→ondobook) 후
+    저장 url이 죽은 주소를 가리키던 버그 수정.
+    """
+    try:
+        from lib.sources import get_base_url
+        base = get_base_url(source)
+        if base:
+            return f"{base.rstrip('/')}/bbs/board.php?bo_table=novel&wr_id={wr_id}"
+    except Exception:
+        pass
+    return f"https://{source}.com/bbs/board.php?bo_table=novel&wr_id={wr_id}"
+
+
 COVERS_DIR = Path("/opt/ai_data/flaresolverr/covers")
 
 # 수집 소스 → 출판사 표기 매핑
@@ -102,7 +118,7 @@ def save_chapter(
         "title": f"{novel_title} - {chapter_num}화" if chapter_num else novel_title,
         "content_length": len(body),
         "content": body,
-        "url": f"https://{source}.com/bbs/board.php?bo_table=novel&wr_id={wr_id}",
+        "url": _source_chapter_url(source, wr_id),
         "collected_at": datetime.now(timezone.utc).isoformat(),
         "source": source,
         "media_type": media_type,

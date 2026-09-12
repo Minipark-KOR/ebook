@@ -925,6 +925,33 @@ def _content_hash(content: str) -> str:
     return hashlib.md5(content.encode('utf-8', errors='replace')).hexdigest()
 
 
+def _claimed_chapter_strict(content: str) -> Optional[int]:
+    """본문 첫 줄에서 화수 표기 추출 (엄격 버전).
+
+    챕터 번호 보정/감지에 사용. 본문 **첫 비어있지 않은 줄**에서만
+    "N화/N편/N장" 또는 "N. " 형태를 인정한다.
+    (lib.storage._extract_chapter_num의 MULTILINE 폴백은 내용 중간의
+    "N화" 언급까지 잡아 오탐을 유발하므로 여기서는 배제)
+    """
+    import re
+    if not content:
+        return None
+    first = ""
+    for line in content.split("\n"):
+        if line.strip():
+            first = line.strip()
+            break
+    if not first:
+        return None
+    m = re.match(r'^(\d{1,4})\s*(?:화|편|장)\b', first)
+    if m:
+        return int(m.group(1))
+    m = re.match(r'^(\d{1,4})\s*[.．]\s*', first)
+    if m:
+        return int(m.group(1))
+    return None
+
+
 def _saved_content_hash_index(novel_title: str, media_type: str = "novel") -> dict:
     """소설별 저장된 본문 해시 → {chapter: 파일명} 인덱스 (중복 감지용).
 
@@ -1102,6 +1129,12 @@ def _run_collect_locked(limit: int = 0, source_filter: str = "") -> dict:
                 success, body, error_msg, chapter_num = collector(wr_id, item)
                 if success:
                     break
+                # 본문이 비어 있으면 사이트에 내용이 없는 것 — 재시도해도 소용없음.
+                # (FlareSolverr rate limit 8분 재대기 낭비 방지 → 빈 챕터 빠른 스킵)
+                body_len = len(body[1]) if isinstance(body, tuple) and len(body) == 2 else len(body or "")
+                if body_len == 0:
+                    log.warning("  본문 비어 있음 (사이트에 내용 없음) — 재시도 생략")
+                    break
             except Exception as e:
                 error_msg = f"{type(e).__name__}: {e}"
                 log.warning(f"  fetch 실패 ({attempt+1}/3): {error_msg}")
@@ -1112,10 +1145,16 @@ def _run_collect_locked(limit: int = 0, source_filter: str = "") -> dict:
             add_bytes(traffic_delta, chapter=True)
 
         if not success:
-            item['last_error'] = f"3회 시도 후 실패 (body={len(body) if body else 0})"
+            body_len = len(body[1]) if isinstance(body, tuple) and len(body) == 2 else len(body or "")
+            # 빈 본문(사이트에 내용 없음)은 재시도 무의미 → 1회 실패로 즉시 DLQ (백필 정체 방지)
+            empty_source = body_len == 0
+            item['last_error'] = (
+                "빈 챕터 (사이트에 본문 없음)" if empty_source
+                else f"3회 시도 후 실패 (body={body_len})"
+            )
             log.warning(f"  ✗ {item['last_error']}")
-            if item['attempts'] >= 3:
-                # 3회 실패 → DLQ 기록 후 queue에서 제거 (데이터 보존)
+            if item['attempts'] >= 3 or empty_source:
+                # 실패 → DLQ 기록 후 queue에서 제거 (데이터 보존)
                 _add_to_dlq(item, item['last_error'])
                 removed_ids.add(wr_id)
             errors.append({"wr_id": wr_id, "error": item['last_error']})
@@ -1149,8 +1188,7 @@ def _run_collect_locked(limit: int = 0, source_filter: str = "") -> dict:
         # (discover의 wr_id→화수 매핑이 오프바이원일 때 저장 단계에서 바로잡음)
         claimed = None
         if body_text:
-            from lib.storage import _extract_chapter_num
-            claimed = _extract_chapter_num(body_text)
+            claimed = _claimed_chapter_strict(body_text)
         if claimed and claimed != chapter_num:
             saved_set = _load_saved_chapters(novel_title, media_type)
             if claimed in saved_set:
@@ -1571,7 +1609,6 @@ def run_check_duplicates(novel_filter: Optional[str] = None, fix: bool = False) 
     import shutil
     from lib.paths import iter_novel_dirs, resolve_novel_dir
     from services.data import rebuild_chapters_index
-    from lib.storage import _extract_chapter_num
 
     # 대상 소설 디렉토리 결정
     targets = []
@@ -1617,7 +1654,7 @@ def run_check_duplicates(novel_filter: Optional[str] = None, fix: bool = False) 
                 if not c or not isinstance(ch, int):
                     continue
                 entries.append({
-                    "file": f, "wr": f.stem, "ch": ch, "claimed": _extract_chapter_num(c),
+                    "file": f, "wr": f.stem, "ch": ch, "claimed": _claimed_chapter_strict(c),
                     "hash": _content_hash(c), "data": d,
                 })
             except Exception:

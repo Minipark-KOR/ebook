@@ -907,6 +907,87 @@ def _invalidate_saved_chapters(novel_title: str) -> None:
     for mt in ("novel", "comic", "webtoon"):
         _saved_chapters_cache.pop(f"{mt}:{novel_id}", None)
     _saved_chapters_cache.pop(novel_id, None)  # 하위 호환
+    _invalidate_saved_hash(novel_title)
+
+
+# ============================================================
+# 중복 본문 감지/처리 — 동일 본문이 다른 화수로 저장되는 것 방지
+# (소스 wr_id 매핑 오류로 같은 내용이 다른 chapter 번호로 중복 저장되는 케이스)
+# ============================================================
+
+DUPLICATES_FILE = WATCHER_DIR / 'duplicates.json'
+_saved_hash_cache: dict[str, dict] = {}
+
+
+def _content_hash(content: str) -> str:
+    """본문 내용 해시 (MD5)."""
+    import hashlib
+    return hashlib.md5(content.encode('utf-8', errors='replace')).hexdigest()
+
+
+def _saved_content_hash_index(novel_title: str, media_type: str = "novel") -> dict:
+    """소설별 저장된 본문 해시 → {chapter: 파일명} 인덱스 (중복 감지용).
+
+    같은 본문이 서로 다른 chapter 번호로 저장되어 있으면 동일 해시 아래
+    여러 (chapter, 파일명)이 나온다.
+    """
+    novel_id = novel_title.replace(' ', '_').replace('/', '_')
+    cache_key = f"{media_type}:{novel_id}"
+    if cache_key in _saved_hash_cache:
+        return _saved_hash_cache[cache_key]
+    from lib.paths import novel_dir_for, resolve_novel_dir
+    novel_dir = novel_dir_for(novel_title, media_type)
+    if not novel_dir.exists():
+        novel_dir = resolve_novel_dir(novel_id)
+    index: dict = {}
+    if novel_dir.exists():
+        for f in novel_dir.glob("*.json"):
+            if f.name in ("meta.json", "_chapters_index.json") or not f.stem.isdigit():
+                continue
+            try:
+                d = json.load(open(f, encoding='utf-8'))
+                c = d.get('content') or ''
+                ch = d.get('chapter')
+                if not c or not isinstance(ch, int):
+                    continue
+                index.setdefault(_content_hash(c), {})[ch] = f.name
+            except Exception:
+                pass
+    _saved_hash_cache[cache_key] = index
+    return index
+
+
+def _invalidate_saved_hash(novel_title: str) -> None:
+    """저장 후 해시 인덱스 무효화."""
+    novel_id = novel_title.replace(' ', '_').replace('/', '_')
+    for mt in ("novel", "comic", "webtoon"):
+        _saved_hash_cache.pop(f"{mt}:{novel_id}", None)
+
+
+def _record_duplicate(novel_title: str, wr_id: int, chapter, dup_chapter, dup_file: str, reason: str) -> None:
+    """중복 본문 이벤트를 duplicates.json에 기록 (치료 대상 파악용)."""
+    try:
+        records = []
+        if DUPLICATES_FILE.exists():
+            try:
+                records = json.loads(DUPLICATES_FILE.read_text(encoding="utf-8"))
+                if not isinstance(records, list):
+                    records = []
+            except Exception:
+                records = []
+        records.append({
+            "novel_title": novel_title,
+            "wr_id": wr_id,
+            "chapter": chapter,
+            "dup_chapter": dup_chapter,
+            "dup_file": dup_file,
+            "reason": reason,
+            "detected_at": datetime.now(timezone.utc).isoformat(),
+        })
+        records = records[-2000:]
+        DUPLICATES_FILE.write_text(json.dumps(records, ensure_ascii=False, indent=2), encoding="utf-8")
+    except Exception:
+        pass
 
 
 def _run_collect_locked(limit: int = 0, source_filter: str = "") -> dict:
@@ -1042,6 +1123,47 @@ def _run_collect_locked(limit: int = 0, source_filter: str = "") -> dict:
 
         # 저장 (enrich/index 없이 순수 저장)
         chapter_num = item.get('chapter') or chapter_num
+        body_text = body[1] if isinstance(body, tuple) and len(body) == 2 else body
+
+        # ── 중복 본문 방지 ──
+        # 같은 본문이 다른 화수(chapter 번호)로 이미 저장되어 있으면 저장 생략.
+        # (소스 wr_id 매핑 오류로 같은 내용이 중복 저장되는 케이스 방지)
+        dup_hit = None
+        if body_text and novel_title:
+            idx = _saved_content_hash_index(novel_title, media_type)
+            for saved_ch, saved_file in (idx.get(_content_hash(body_text)) or {}).items():
+                if saved_ch != chapter_num:
+                    dup_hit = (saved_ch, saved_file)
+                    break
+        if dup_hit:
+            log.warning(
+                f"  ⚠ wr_id={wr_id} 본문 중복 — chapter {dup_hit[0]} ({dup_hit[1]})와 동일, 저장 생략"
+            )
+            _record_duplicate(novel_title, wr_id, chapter_num, dup_hit[0], dup_hit[1], "same_body_different_chapter")
+            removed_ids.add(wr_id)
+            dedup_skipped += 1
+            continue
+
+        # ── 챕터 번호 보정 ──
+        # 본문 표기("N화")가 기대 chapter와 다르고 충돌이 없으면 본문 표기 우선.
+        # (discover의 wr_id→화수 매핑이 오프바이원일 때 저장 단계에서 바로잡음)
+        claimed = None
+        if body_text:
+            from lib.storage import _extract_chapter_num
+            claimed = _extract_chapter_num(body_text)
+        if claimed and claimed != chapter_num:
+            saved_set = _load_saved_chapters(novel_title, media_type)
+            if claimed in saved_set:
+                log.warning(
+                    f"  ⚠ wr_id={wr_id} 본문 표기 {claimed}화가 이미 저장됨 — 저장 생략"
+                )
+                _record_duplicate(novel_title, wr_id, chapter_num, claimed, f"ch{claimed}", "claimed_already_saved")
+                removed_ids.add(wr_id)
+                dedup_skipped += 1
+                continue
+            log.warning(f"  ↷ 챕터 번호 보정: {chapter_num} → {claimed} (본문 표기)")
+            chapter_num = claimed
+
         _save_chapter_only(novel_title, wr_id, body, chapter_num, source, media_type)
         _invalidate_saved_chapters(novel_title)  # 캐시 갱신 — 이후 중복 스킵 정확성
         _body_len = body[1] if isinstance(body, tuple) and len(body) == 2 else body
@@ -1429,6 +1551,196 @@ def _build_epub_for_drained_novels(remaining_queue: list, touched_novels: dict) 
 
 # === 메인 ===
 
+def run_check_duplicates(novel_filter: Optional[str] = None, fix: bool = False) -> dict:
+    """소설별 중복 본문/챕터 번호 불일치 감지 + (--fix) 자동 수리.
+
+    감지:
+      1. 동일 본문이 서로 다른 chapter 번호로 저장된 경우 (중복)
+      2. 본문 표기("N화")와 저장 chapter 번호가 다른 경우 (소스 wr_id 매핑 오프바이원)
+
+    fix=True 수리:
+      - 중복: 본문 표기와 일치하는 chapter가 canonical, 나머지 파일은 삭제 전 백업 이동
+      - 불일치: 저장 chapter = 본문 표기로 재정렬 (충돌/모호 시 스킵+보고)
+      - 이후 _chapters_index.json 재구축
+    변경/삭제 파일은 `_dupe_backup_YYYYMMDD/`로 백업한다.
+
+    사용법:
+      pipeline.py check-dupes                    # 전체 감지 (보고만)
+      pipeline.py check-dupes 화산귀환 --fix      # 특정 소설 감지 + 수리
+    """
+    import shutil
+    from lib.paths import iter_novel_dirs, resolve_novel_dir
+    from services.data import rebuild_chapters_index
+    from lib.storage import _extract_chapter_num
+
+    # 대상 소설 디렉토리 결정
+    targets = []
+    if novel_filter:
+        nid = novel_filter.replace(' ', '_').replace('/', '_')
+        for mt, nd in iter_novel_dirs():
+            if nd.name == nid:
+                targets.append(nd)
+                break
+        if not targets:
+            nd = resolve_novel_dir(nid)
+            if nd.exists():
+                targets.append(nd)
+    else:
+        targets = [nd for mt, nd in iter_novel_dirs()]
+
+    stats = {
+        "novels": 0, "duplicates": [], "mislabeled": [],
+        "renumbered": 0, "removed": 0, "collisions": [], "skipped": [],
+    }
+
+    for nd in targets:
+        novel_id = nd.name
+        files = [f for f in nd.glob("*.json")
+                 if f.name not in ("meta.json", "_chapters_index.json") and f.stem.isdigit()]
+        if not files:
+            continue
+        stats["novels"] += 1
+
+        # (a) 로드 + (b) 백업 dir (fix 전용)
+        bak = None
+        if fix:
+            from datetime import datetime as _dt
+            bak = nd / f"_dupe_backup_{_dt.now().strftime('%Y%m%d_%H%M%S')}"
+            bak.mkdir(exist_ok=True)
+
+        entries = []
+        for f in files:
+            try:
+                d = json.load(open(f, encoding='utf-8'))
+                c = d.get('content') or ''
+                ch = d.get('chapter')
+                if not c or not isinstance(ch, int):
+                    continue
+                entries.append({
+                    "file": f, "wr": f.stem, "ch": ch, "claimed": _extract_chapter_num(c),
+                    "hash": _content_hash(c), "data": d,
+                })
+            except Exception:
+                stats["skipped"].append({"novel": novel_id, "file": f.name, "reason": "json_error"})
+
+        # 1) 중복 본문 (같은 해시, 다른 chapter)
+        by_hash: dict[str, list] = {}
+        for e in entries:
+            by_hash.setdefault(e["hash"], []).append(e)
+        for h, group in by_hash.items():
+            if len({e["ch"] for e in group}) > 1:
+                stats["duplicates"].append({"novel": novel_id, "group": [(e["wr"], e["ch"], e["claimed"]) for e in group]})
+
+        # 2) 불일치 (본문 표기 != 저장 chapter)
+        for e in entries:
+            if e["claimed"] and e["claimed"] != e["ch"]:
+                stats["mislabeled"].append({"novel": novel_id, "wr": e["wr"], "ch": e["ch"], "claimed": e["claimed"]})
+
+        if not fix:
+            continue
+
+        # ── fix: 재정렬 + 중복 제거 ──
+        # 본문 표기(claimed)가 진실값. claimed → 파일 목록으로 그룹화.
+        claimed_map: dict[int, list] = {}
+        for e in entries:
+            if e["claimed"]:
+                claimed_map.setdefault(e["claimed"], []).append(e)
+
+        # 정적 챕터 점유: 본문 표기가 없거나 이미 일치하는 파일 (이동하지 않음)
+        static = {e["ch"]: e for e in entries if (not e["claimed"]) or e["ch"] == e["claimed"]}
+
+        # 1) 중복 그룹 (같은 claimed, 여러 파일): canonical 유지, 나머지 백업+제거
+        for claimed, group in claimed_map.items():
+            if len(group) < 2:
+                continue
+            canon = next((e for e in group if e["ch"] == claimed), group[0])
+            for e in group:
+                if e is canon:
+                    continue
+                if e["hash"] != canon["hash"]:
+                    # 같은 화수를 주장하지만 내용이 다름 = 진짜 충돌 → 수동 필요
+                    stats["collisions"].append({
+                        "novel": novel_id, "claimed": claimed,
+                        "a": f"{e['wr']}.json(ch{e['ch']})", "b": f"{canon['wr']}.json(ch{canon['ch']})",
+                        "reason": "different_content_same_claimed",
+                    })
+                    log.warning(f"  ⚠ [{novel_id}] 진짜 충돌: {e['wr']}.json vs {canon['wr']}.json (둘 다 {claimed}화 주장, 내용 다름) — 수동 필요")
+                    continue
+                if bak:
+                    shutil.move(str(e["file"]), str(bak / e["file"].name))
+                stats["removed"] += 1
+                log.warning(f"  ✂ [{novel_id}] 중복 제거: {e['file'].name} (ch{e['ch']}, 본문 {claimed}화) → canonical {canon['file'].name}")
+            if canon["ch"] != claimed:
+                _set_chapter_field(canon["file"], claimed)
+                stats["renumbered"] += 1
+                log.warning(f"  ↷ [{novel_id}] {canon['file'].name} ch {canon['ch']} → {claimed}")
+
+        # 2) 단일 그룹: 오프바이원 재정렬 (충돌 시 스킵+보고)
+        for claimed, group in claimed_map.items():
+            if len(group) != 1:
+                continue
+            e = group[0]
+            if e["ch"] == claimed:
+                continue
+            clash = static.get(claimed)
+            if clash is not None and clash["file"] != e["file"]:
+                stats["collisions"].append({
+                    "novel": novel_id, "wr": e["wr"], "ch": e["ch"], "claimed": claimed,
+                    "clash": f"{clash['wr']}.json",
+                })
+                log.warning(f"  ⚠ [{novel_id}] 충돌로 스킵: {e['file'].name} ch{e['ch']}→{claimed} (이미 {clash['file'].name}이 ch{claimed} 점유)")
+                continue
+            _set_chapter_field(e["file"], claimed)
+            stats["renumbered"] += 1
+            log.warning(f"  ↷ [{novel_id}] {e['file'].name} ch {e['ch']} → {claimed} (본문 표기)")
+
+        # 인덱스 재구축
+        if stats["renumbered"] or stats["removed"]:
+            try:
+                n = rebuild_chapters_index(nd)
+                log.info(f"  ✓ [{novel_id}] 인덱스 재구축 ({len(n)}개)")
+            except Exception as ex:
+                log.warning(f"  ✗ [{novel_id}] 인덱스 재구축 실패: {ex}")
+
+    # ── 보고 ──
+    print(f"소설 {stats['novels']}개 스캔")
+    print(f"  중복 본문 그룹: {len(stats['duplicates'])}")
+    for d in stats['duplicates']:
+        print(f"    - {d['novel']}: {d['group']}")
+    print(f"  챕터 번호 불일치: {len(stats['mislabeled'])}")
+    if not fix:
+        for m in stats['mislabeled'][:30]:
+            print(f"    - {m['novel']} {m['wr']}.json ch{m['ch']} → 본문 {m['claimed']}화")
+        if len(stats['mislabeled']) > 30:
+            print(f"    ... 외 {len(stats['mislabeled'])-30}건")
+    if fix:
+        print(f"  수리: 재정렬 {stats['renumbered']}건, 중복 제거 {stats['removed']}건")
+        if stats['collisions']:
+            print(f"  충돌 스킵: {len(stats['collisions'])}건")
+            for c in stats['collisions'][:20]:
+                print(f"    - {c}")
+        if stats['skipped']:
+            print(f"  스킵(오류): {len(stats['skipped'])}건")
+    return stats
+
+
+def _set_chapter_field(file_path: Path, chapter: int) -> None:
+    """챕터 JSON의 chapter/제목 필드를 갱신 (재정렬용)."""
+    import re as _re
+    try:
+        d = json.load(open(file_path, encoding='utf-8'))
+    except Exception:
+        return
+    d['chapter'] = chapter
+    title = d.get('title') or ""
+    m = _re.sub(r'(\s*\d+\s*(?:화|편|장)\s*)$', f' {chapter}화', title)
+    if m != title:
+        d['title'] = m
+    tmp = file_path.with_suffix('.json.tmp')
+    tmp.write_text(json.dumps(d, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    tmp.rename(file_path)
+
+
 def run_all(novel_main_wr_id: int, novel_title: str, source: str = "bookto31", bo_table: str = "novel") -> dict:
     """전체 파이프라인 실행 (discover → collect → enrich → index → revalidate)."""
     results = {}
@@ -1603,6 +1915,18 @@ def main():
     elif cmd == "revalidate":
         novel_id = sys.argv[2] if len(sys.argv) > 2 else None
         run_revalidate(novel_id)
+
+    elif cmd == "check-dupes":
+        """중복 본문/챕터 번호 불일치 감지 + (--fix) 자동 수리.
+        사용법:
+          pipeline.py check-dupes                 # 전체 감지 (보고만)
+          pipeline.py check-dupes 화산귀환         # 특정 소설 감지
+          pipeline.py check-dupes 화산귀환 --fix   # 감지 + 수리(재정렬/중복 제거)
+        """
+        args = sys.argv[2:]
+        fix = "--fix" in args
+        novel_filter = next((a for a in args if not a.startswith("--")), None)
+        run_check_duplicates(novel_filter, fix=fix)
 
     elif cmd == "epub":
         """EPUB 캐시 제작/재제작 (수동).

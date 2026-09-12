@@ -60,10 +60,12 @@ _RESET_AFTER_CONSECUTIVE_FAILURES = 3
 
 # 안전장치 한도 (환경변수로 오버라이드)
 # - novel-content API 페이로드 상한 (정상 ~24KB, 60KB 초과 시 비정상으로 판단)
-# - 회차당 총 트래픽 상한: 콜드(첫 로드, JS 번들 포함 ~0.7~1.1MB) / warm(~430KB)
+# - 회차당 총 트래픽 상한: 사이트가 JS/wasm을 매 챕터 재다운로드(anti-bot)하므로
+#   콜드 ~1.3MB / 웜 ~1.6MB가 정상. 상한은 "비정상 대용량" 안전장치로
+#   정상 챕터를 차단하지 않도록 넉넉히(콜드 2.5MB / 웜 2MB) 잡는다.
 _NOVEL_CONTENT_MAX_BYTES = int(float(os.getenv('TOKI31_CONTENT_MAX_KB', '60'))) * 1024
-_CHAPTER_COLD_MAX_BYTES = int(float(os.getenv('TOKI31_CHAPTER_COLD_MAX_MB', '1.5')) * 1024 * 1024)
-_CHAPTER_WARM_MAX_BYTES = int(float(os.getenv('TOKI31_CHAPTER_WARM_MAX_MB', '1')) * 1024 * 1024)
+_CHAPTER_COLD_MAX_BYTES = int(float(os.getenv('TOKI31_CHAPTER_COLD_MAX_MB', '2.5')) * 1024 * 1024)
+_CHAPTER_WARM_MAX_BYTES = int(float(os.getenv('TOKI31_CHAPTER_WARM_MAX_MB', '2.0')) * 1024 * 1024)
 
 
 def _load_proxy_env():

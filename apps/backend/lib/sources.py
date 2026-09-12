@@ -196,6 +196,54 @@ def get_domains(source: str) -> list[str]:
     return list(cfg.domains) if cfg else []
 
 
+def add_source_domain(source: str, host: str, set_base: bool = True) -> bool:
+    """소스에 새 도메인을 domains에 등록 (sources.json 영속화).
+
+    미등록 도메인이 들어왔을 때 자동 등록용. 기존 domains는 유지(후보/미러)하고
+    새 호스트를 맨 앞에 추가한다. set_base=True면 base_url도 새 도메인으로 변경
+    (사이트가 이동한 것으로 간주 — 이전 도메인은 후보로 유지, 헬스체크가 폐기 판정).
+
+    Returns: 성공 여부.
+    """
+    host = (host or "").strip().lower().rstrip("/")
+    if not host or "://" in host:
+        host = host.split("//")[-1].split("/")[0] if host else ""
+    if not host:
+        return False
+
+    raw: dict = {}
+    if _SOURCES_FILE.exists():
+        try:
+            raw = json.loads(_SOURCES_FILE.read_text(encoding="utf-8"))
+            if not isinstance(raw, dict):
+                raw = {}
+        except Exception:
+            raw = {}
+    if source not in raw:
+        return False
+
+    domains = raw[source].get("domains", [])
+    if host not in domains:
+        raw[source]["domains"] = [host] + list(domains)
+    if set_base:
+        raw[source]["base_url"] = f"https://{host}"
+
+    try:
+        if _SOURCES_FILE.exists():
+            _SOURCES_FILE.rename(_SOURCES_FILE.with_suffix(".json.bak"))
+        _SOURCES_FILE.write_text(
+            json.dumps(raw, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+        )
+        logger.info(
+            "sources.json 도메인 등록: [%s] +%s (base_url=%s)",
+            source, host, raw[source]["base_url"],
+        )
+        return True
+    except Exception as e:
+        logger.warning("sources.json 도메인 등록 실패 (%s): %s", source, e)
+        return False
+
+
 def get_collector(source: str) -> str:
     """소스의 수집기 등록 키 (COLLECTORS dict)."""
     cfg = load_sources().get(source)

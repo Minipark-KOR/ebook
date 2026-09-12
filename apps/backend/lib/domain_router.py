@@ -17,6 +17,7 @@
 import datetime
 import json
 import logging
+import re
 import socket
 from pathlib import Path
 from typing import Callable, Iterator, Optional
@@ -146,6 +147,92 @@ def dns_alive(host: str, timeout: float = 3.0) -> bool:
         return True
     except Exception:
         return False
+
+
+# ============================================================
+# 미등록 도메인 분석/자동 등록 — 사이트 도메인이 수시로 바뀌는 환경 대응
+# ============================================================
+
+
+def classify_source_by_url(url: str) -> Optional[str]:
+    """URL 패턴 기반 소스 패밀리 1차 판별 (네트워크 없음).
+
+    - `/novel/{id}` 경로 → toki31 (뉴토끼 Next.js 구조)
+    - `wr_id=` 또는 `bo_table=` 쿼리 → bookto31 (북토끼 GNUBOARD5)
+    """
+    if not url:
+        return None
+    if re.search(r"/novel/\d+", url):
+        return "toki31"
+    if "wr_id=" in url or "bo_table=" in url:
+        return "bookto31"
+    return None
+
+
+def classify_source_by_html(html: str) -> Optional[str]:
+    """HTML 콘텐츠 마커 기반 소스 패밀리 2차 판별 (검증용)."""
+    if not html:
+        return None
+    # toki31: Next.js + 에피소드 목록/본문 API 구조
+    if "novel-ep-row" in html or "novel-content" in html:
+        return "toki31"
+    # bookto31: GNUBOARD5 본문(view-content) + 게시판 링크(bo_table/wr_id)
+    if "view-content" in html and ("bo_table=" in html or "wr_id=" in html):
+        return "bookto31"
+    return None
+
+
+def detect_and_register_source(url: str, verify: bool = True) -> Optional[str]:
+    """미등록 도메인 URL을 분석해 소스 패밀리 판별 + sources.json 자동 등록.
+
+    1. 이미 등록된 소스의 도메인이면 해당 source 반환 (no-op)
+    2. URL 패턴으로 후보 소스 1차 판별
+    3. verify=True면 bookto31 후보는 FlareSolverr로 페이지를 가져와 HTML 마커 2차 검증
+       (toki31은 /novel/{id} 패턴이 신뢰성 높아 패턴만으로 판별)
+    4. 일치하면 add_source_domain으로 도메인/베이스 등록
+
+    Returns: 판별·등록된 source 키 또는 None (분석 실패/비인지 사이트)
+    """
+    from lib.sources import add_source_domain, load_sources
+
+    host = host_of(url)
+    if not host:
+        return None
+
+    # 이미 등록된 소스 도메인 → no-op
+    for key, cfg in load_sources().items():
+        if host in cfg.domains:
+            return key
+
+    candidate = classify_source_by_url(url)
+    if not candidate:
+        return None
+
+    # bookto31 후보는 HTML 검증 (사이트가 실제로 GNUBOARD 구조인지)
+    if verify and candidate == "bookto31":
+        html = None
+        try:
+            from services.bookto31 import _fetch_with_flaresolverr
+            html = _fetch_with_flaresolverr(
+                url, max_attempts=1, rate_limit=False, timeout_ms=30000
+            )
+        except Exception:
+            html = None
+        if html is None or classify_source_by_html(html) != "bookto31":
+            logger.warning("미등록 도메인 분석 실패(HTML 불일치): %s", url)
+            return None
+
+    if add_source_domain(candidate, host):
+        msg = f"🆕 [{candidate}] 미등록 도메인 자동 등록: {host}"
+        logger.warning(msg)
+        record_domain_event({
+            "source": candidate,
+            "event": "auto_register_unknown",
+            "host": host,
+            "url": url,
+        })
+        return candidate
+    return None
 
 
 def check_domain_health(

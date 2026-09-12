@@ -390,6 +390,16 @@ async def start_pipeline(req: StartPipelineRequest):
     # 2. URL 파싱
     source, novel_id, bo_table = parse_url(req.url)
     if not source or not novel_id:
+        # 도메인은 자주 바뀌므로 미등록 도메인도 분석해서 자동 등록 시도
+        # (URL 패턴 + HTML 구조로 소스 패밀리 판별 → sources.json 등록)
+        try:
+            from lib.domain_router import detect_and_register_source
+            registered = detect_and_register_source(req.url)
+            if registered:
+                source, novel_id, bo_table = parse_url(req.url)
+        except Exception:
+            pass
+    if not source or not novel_id:
         # 도메인은 자주 바뀌므로 목록을 명시하지 않는다 (sources.json 기준 자동 판정)
         raise HTTPException(
             status_code=400,

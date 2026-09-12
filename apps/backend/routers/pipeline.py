@@ -11,7 +11,7 @@ Admin 페이지에서 URL을 받아:
 5. pipeline.py loop가 실행 중인지 확인, 없으면 시작
 
 URL 패턴:
-  bookto31: https://bookto31.com/bbs/board.php?bo_table=novel&wr_id=25575
+  bookto31: https://23.ondobook.net/bbs/board.php?bo_table=novel&wr_id=25575
   newtoki:  https://toki31.com/novel/58455
 """
 
@@ -392,7 +392,7 @@ async def start_pipeline(req: StartPipelineRequest):
     if not source or not novel_id:
         raise HTTPException(
             status_code=400,
-            detail="지원하지 않는 URL 형식입니다. sources.json에 등록된 도메인(예: bookto31.com, newto31.com) URL이어야 합니다.",
+            detail="지원하지 않는 URL 형식입니다. sources.json에 등록된 도메인(예: 23.ondobook.net, newto31.com) URL이어야 합니다.",
         )
 
     # 3. 중복 시작 방지

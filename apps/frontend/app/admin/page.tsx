@@ -215,11 +215,11 @@ export default function AdminPage() {
               type="url"
               value={url}
               onChange={(e) => setUrl(e.target.value)}
-              placeholder="https://bookto31.com/bbs/board.php?bo_table=novel&wr_id=25575"
+              placeholder="https://23.ondobook.net/bbs/board.php?bo_table=novel&wr_id=25575"
               className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
             />
             <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
-              지원: bookto31.com / newto31.com / newtoki31.com / toki31.com
+              지원: 23.ondobook.net / bookto31.com / newto31.com / newtoki31.com / toki31.com
             </p>
           </div>
 

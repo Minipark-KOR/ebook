@@ -10,8 +10,8 @@ sources.json 하나로 소스 추가/도메인 변경/수집기 지정을 코드
 sources.json 형식:
     {
       "bookto31": {
-        "domains": ["bookto31.com"],      # URL 매칭용 도메인 목록
-        "base_url": "https://bookto31.com", # 크롤링 베이스 URL
+        "domains": ["23.ondobook.net", "bookto31.com"],  # URL 매칭용 도메인 목록
+        "base_url": "https://23.ondobook.net", # 크롤링 베이스 URL
         "collector": "bookto31",           # COLLECTORS 등록 키
         "discover": "gnuboard",            # discover 전략
         "speed_hint_sec": 300              # ETA fallback 속도
@@ -30,8 +30,8 @@ _SOURCES_FILE = Path(__file__).resolve().parent.parent / "sources.json"
 # 소스가 없을 때 기본값 (sources.json 실패 시에도 동작 보장)
 _DEFAULT_SOURCES = {
     "bookto31": {
-        "domains": ["bookto31.com"],
-        "base_url": "https://bookto31.com",
+        "domains": ["23.ondobook.net", "bookto31.com"],
+        "base_url": "https://23.ondobook.net",
         "collector": "bookto31",
         "discover": "gnuboard",
         "speed_hint_sec": 300,

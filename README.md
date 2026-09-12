@@ -5,7 +5,7 @@
 > 📚 **상세 문서**: [`docs/`](docs/README.md) 디렉토리에 시스템 전체 설명이 있습니다.
 
 ## 핵심 요약
-- 북토끼(bookto31.com) 등 Cloudflare 보호 사이트의 한국 웹소설 챕터를 자동 수집
+- 북토끼(23.ondobook.net) 등 Cloudflare 보호 사이트의 한국 웹소설 챕터를 자동 수집
 - **자동화 워치독** (ebook-watcher): 큐에 추가하면 15분마다 자동 수집, devforge-watchdog이 죽으면 자동 복구
 - 로컬 JSON DB에 저장 (`/opt/ai_data/flaresolverr/novels/`)
 - FastAPI 백엔드 + Next.js 프론트엔드를 Vercel Monorepo로 단일 배포

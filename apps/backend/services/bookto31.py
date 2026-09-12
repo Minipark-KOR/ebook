@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 # Status: refactored (Phase 2)
 # Path: ebooklib/apps/backend/services/bookto31.py
-"""bookto31.com (북토끼) 크롤러 - FlareSolverr Cloudflare 우회 + GNUBOARD5 파싱
+"""23.ondobook.net (북토끼) 크롤러 - FlareSolverr Cloudflare 우회 + GNUBOARD5 파싱
 
 배경:
-- bookto31.com은 Cloudflare Turnstile Challenge로 보호된다.
+- 23.ondobook.net은 Cloudflare Turnstile Challenge로 보호된다.
 - 자동화 도구(requests, curl)는 403을 받고 쿠키/세션이 없으면 본문이 비어있다.
 - FlareSolverr (http://127.0.0.1:8191)을 통해 헤드리스 브라우저로 challenge를 풀고
   cf_clearance 쿠키를 받은 뒤 페이지를 가져온다.

@@ -528,6 +528,16 @@ def test_toki31_chapter_with_proxy():
 > novel_id 검색법: `toki31.com/search`에서 **URL 파라미터는 무시되고**, 검색창에 직접
 > 타이핑 후 Enter 해야 결과가 나온다 (Next.js 클라이언트 검색). 결과 `/novel/{id}` 링크 확인.
 
+### 6.5 미등록 도메인 자동 분석/등록 (2026-09-12)
+- 사이트 도메인이 수시로 바뀌므로, 등록되지 않은 도메인 URL이 들어오면
+  시스템이 URL 패턴 + HTML 구조로 소스 패밀리를 판별해 **자동 등록**한다.
+- 판별 규칙 (`lib/domain_router.py`):
+  - `/novel/{id}` 경로 → `toki31`
+  - `wr_id=` / `bo_table=` 쿼리 → `bookto31` (FlareSolverr로 HTML 검증: `view-content`+`bo_table`)
+- 등록: `add_source_domain()` → domains 맨 앞 추가 + base_url 갱신
+  (기존 도메인은 후보로 유지, 헬스체크가 폐기 판정)
+- Admin 파이프라인 시작 시 `parse_url` 실패 → 미등록 도메인 분석 시도
+
 ### 6.4 누락 챕터 toki31 폴백 수집
 - ondobook(bookto31)에 없는 챕터(빈 챕터/누락)는 toki31이 보유할 수 있음
   - 예: 화산귀환 1342/1345는 ondobook에 본문 없음 → **toki31에 정상 존재**(6263자/5407자)

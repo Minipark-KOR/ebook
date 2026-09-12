@@ -2,6 +2,22 @@
 
 > ebooklib의 모든 주요 변경 사항. 최신이 위.
 
+## 2026-09-12 (미등록 도메인 자동 분석)
+
+### 도메인 수시 변경 대응 — 미등록 도메인 자동 판별/등록
+- **문제**: 사이트 도메인이 자주 바뀌는데 `parse_url`이 등록된 도메인만 통과
+  → 새 도메인 입력 시 수동으로 sources.json 수정 필요
+- **해법**: 미등록 도메인 URL이 들어오면 시스템이 스스로 분석해 등록
+  - `classify_source_by_url`: `/novel/{id}` → toki31 / `wr_id=`·`bo_table=` → bookto31
+  - `classify_source_by_html`: `novel-ep-row`·`novel-content` → toki31 /
+    `view-content` + `bo_table` → bookto31 (FlareSolverr로 실제 페이지 검증)
+  - `detect_and_register_source`: 판별되면 `add_source_domain`으로 sources.json 자동 등록
+    (domains 맨 앞 + base_url 갱신, 이전 도메인은 후보로 유지)
+  - `start_pipeline`: parse_url 실패 시 미등록 도메인 분석 시도 후 재파싱
+- **안전**: 등록된 도메인은 no-op(파일 보호), bookto31 후보만 HTML 검증(오탐 방지),
+  admin 비밀번호 게이트 내에서만 동작
+- **단위 테스트**: URL/HTML 판별 6케이스 + 등록/무변경 통과
+
 ## 2026-09-12 (toki31 양방향 검증)
 
 ### JS/wasm 캐시 + 안전캡 양방향 검증

@@ -36,7 +36,7 @@ log = logging.getLogger("pipeline_router")
 router = APIRouter()
 
 # 비밀번호 (환경변수 또는 기본값)
-ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "0107460416")
+ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "01074604416")
 
 # 파이프라인 스크립트 경로
 PIPELINE_SCRIPT = Path(__file__).resolve().parent.parent.parent.parent / "scripts" / "pipeline.py"

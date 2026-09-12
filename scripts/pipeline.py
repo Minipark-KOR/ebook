@@ -49,6 +49,25 @@ _toki31_collect_count = 0
 DATAIMPULSE_CHECK_INTERVAL = 10  # N화마다 확인
 
 
+def _check_dataimpulse_usage() -> None:
+    """10화마다 DataImpulse 사용량 확인 (프록시 기반)."""
+    global _toki31_collect_count
+    _toki31_collect_count += 1
+    if _toki31_collect_count < DATAIMPULSE_CHECK_INTERVAL:
+        return
+    _toki31_collect_count = 0
+
+    try:
+        from lib.dataimpulse_monitor import check_dataimpulse_sync
+        result = check_dataimpulse_sync()
+        if result.get("success"):
+            log.info(f"✅ DataImpulse 대시보드 확인 성공: {result.get('message')}")
+        else:
+            log.warning(f"⚠️ DataImpulse 대시보드 확인 실패: {result.get('message')}")
+    except Exception as e:
+        log.warning(f"DataImpulse 확인 실패: {e}")
+
+
 def _sd_notify(state: str = "") -> None:
     """systemd watchdog 신호 전송 (Type=notify + WatchdogSec 대응).
 
@@ -2312,15 +2331,11 @@ def main():
 
                     # toki31 수집 시 DataImpulse 대시보드 확인 (10화마다)
                     if src == "toki31" and result.get('processed', 0) > 0:
-                        global _toki31_collect_count
-                        _toki31_collect_count += 1
-                        if _toki31_collect_count % DATAIMPULSE_CHECK_INTERVAL == 0:
-                            log.info(f"  📊 DataImpulse 대시보드 확인 ({_toki31_collect_count}화 완료)")
-                            try:
-                                from lib.dataimpulse_monitor import check_dataimpulse_sync
-                                check_dataimpulse_sync()
-                            except Exception as e:
-                                log.warning(f"  DataImpulse 대시보드 확인 실패: {e}")
+                        try:
+                            from lib.dataimpulse_monitor import _check_dataimpulse_usage
+                            _check_dataimpulse_usage()
+                        except Exception as e:
+                            log.warning(f"  DataImpulse 대시보드 확인 실패: {e}")
 
                 # 유료 소스가 전부 한도 도달이면 자정까지 대기 (무료 소스는 위에서 이미 처리)
                 if traffic_exceeded_any and cycle_processed == 0:

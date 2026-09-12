@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""DataImpulse 대시보드 모니터 - CDP 기반 (Playwright)
+"""DataImpulse 대시보드 모니터 - 프록시 기반 (Playwright)
 
 10화마다 호출하여 DataImpulse 대시보드 사용량과 추적 데이터를 비교합니다.
-Turnstile 인증이 필요한 경우 Gracefully fallback합니다.
+프록시 인증(IP whitelist 또는 proxy auth)으로 Turnstile 우회 없이 접근합니다.
 """
 
 import asyncio
@@ -20,18 +20,17 @@ from lib.traffic_guard import summary as get_traffic_summary
 logger = logging.getLogger(__name__)
 
 DASHBOARD_URL = "https://app.dataimpulse.com/dashboard"
-SIGNIN_URL = "https://app.dataimpulse.com/sign-in"
 
-# .env.local에서 크레덴셜 로드
+# .env.local에서 프록시 크레덴셜 로드
 _env_path = Path(__file__).parent.parent / ".env.local"
 
 
-def _load_credentials() -> tuple[str, str]:
-    """DataImpulse 로그인/비밀번호 로드."""
+def _load_proxy_credentials() -> tuple[str, str, str, int]:
+    """DataImpulse 프록시 인증 정보 로드."""
     user = os.getenv("DATAIMPULSE_USER", "")
     passwd = os.getenv("DATAIMPULSE_PASS", "")
-    if user and passwd:
-        return user, passwd
+    host = os.getenv("DATAIMPULSE_HOST", "gw.dataimpulse.com")
+    port = int(os.getenv("DATAIMPULSE_PORT", "823"))
 
     # .env.local에서 직접 파싱
     if _env_path.exists():
@@ -41,17 +40,32 @@ def _load_credentials() -> tuple[str, str]:
                 user = line.split("=", 1)[1].strip()
             elif line.startswith("DATAIMPULSE_PASS="):
                 passwd = line.split("=", 1)[1].strip()
-    return user, passwd
+            elif line.startswith("DATAIMPULSE_HOST="):
+                host = line.split("=", 1)[1].strip()
+            elif line.startswith("DATAIMPULSE_PORT="):
+                try:
+                    port = int(line.split("=", 1)[1].strip())
+                except ValueError:
+                    pass
+    return user, passwd, host, port
+
+
+def _proxy_url() -> str:
+    """프록시 URL 구성 (user:pass@host:port)."""
+    user, passwd, host, port = _load_proxy_credentials()
+    if user and passwd:
+        return f"http://{user}:{passwd}@{host}:{port}"
+    return f"http://{host}:{port}"
 
 
 async def check_dataimpulse_usage(cdp_url: str = "http://127.0.0.1:9222") -> dict:
-    """DataImpulse 대시보드에서 사용량을 확인합니다 (CDP 직접 사용).
+    """DataImpulse 대시보드에서 사용량을 확인합니다 (프록시 기반).
 
-    Turnstile이 차단되면 Gracefully fallback하여 로그만 남깁니다.
+    프록시를 통해 대시보드에 접근 (IP whitelist → 로그인 불필요).
     """
-    user, passwd = _load_credentials()
+    user, passwd, host, port = _load_proxy_credentials()
     if not user or not passwd:
-        msg = "DataImpulse 크레덴셜 없음 — 대시보드 확인 스킵"
+        msg = "DataImpulse 프록시 크레덴셜 없음 — 대시보드 확인 스킵"
         logger.warning(msg)
         return {"success": False, "used_gb": None, "remaining_gb": None, "message": msg}
 
@@ -66,16 +80,19 @@ async def check_dataimpulse_usage(cdp_url: str = "http://127.0.0.1:9222") -> dic
 
     try:
         async with async_playwright() as p:
-            # CDP 연결 (기존 Playwright Chromium 등)
-            browser = await p.chromium.connect_over_cdp(cdp_url)
-            page = await browser.new_page()
+            proxy_auth = {"server": _proxy_url(), "username": user, "password": passwd}
+            browser = await p.chromium.launch(headless=True, proxy=proxy_auth)
+            context = await browser.new_context(user_agent=(
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+            ))
+            page = await context.new_page()
 
-            # 1. 대시보드 페이지로 이동 (networkidle 대기)
-            logger.info("DataImpulse 대시보드 접속 중...")
+            # 1. 대시보드 페이지로 이동 (프록시를 통해)
+            logger.info("DataImpulse 대시보드 접속 중 (프록시: %s:%d)...", host, port)
             try:
                 await page.goto(DASHBOARD_URL, wait_until="networkidle", timeout=30000)
             except Exception:
-                # networkidle 실패 시 domcontentloaded로 폴백
                 await page.goto(DASHBOARD_URL, wait_until="domcontentloaded", timeout=30000)
 
             # 페이지 로드 대기
@@ -85,10 +102,10 @@ async def check_dataimpulse_usage(cdp_url: str = "http://127.0.0.1:9222") -> dic
             page_text = await page.content()
             current_url = page.url
 
-            # 2. 로그인 페이지로 리다이렉트되었으면 인증 필요
+            # 2. 로그인 페이지로 리다이렉트되었으면 프록시 문제
             if "sign-in" in current_url or "login" in current_url.lower():
-                result["message"] = "로그인 필요 — Turnstile 인증 필요"
-                logger.warning("DataImpulse 대시보드: 로그인 페이지로 리다이렉트됨 (Turnstile 인증 필요)")
+                result["message"] = "로그인 필요 — 프록시 인증 확인 필요"
+                logger.warning("DataImpulse 대시보드: 로그인 페이지로 리다이렉트됨")
                 await browser.close()
                 _log_fallback_status(result)
                 return result
@@ -100,7 +117,8 @@ async def check_dataimpulse_usage(cdp_url: str = "http://127.0.0.1:9222") -> dic
             # 패턴 1: "X.XX GB left" 또는 "Y.YY GB used"
             match = re.search(r'\(?\s*([0-9.]+)\s*GB\s*\)?\s*(?:left|used)', page_text, re.IGNORECASE)
             if match:
-                if 'left' in page_text.lower()[match.start():match.end()]:
+                idx = match.start()
+                if 'left' in page_text.lower()[idx:]:
                     remaining_gb = float(match.group(1))
                 else:
                     used_gb = float(match.group(1))
@@ -109,17 +127,16 @@ async def check_dataimpulse_usage(cdp_url: str = "http://127.0.0.1:9222") -> dic
             if used_gb is None:
                 matches = re.findall(r'([0-9.]+)\s*GB', page_text, re.IGNORECASE)
                 if matches:
-                    # 가장 최근/가장 큰 숫자나, 문맥에 맞는 것 선택
-                    used_gb = float(matches[-1])  # 간단한 heuristic
+                    used_gb = float(matches[-1])
 
-            # 3. 비교 결과 구성
+            # 4. 비교 결과 구성
             if used_gb is not None or remaining_gb is not None:
                 result["success"] = True
                 result["used_gb"] = used_gb
                 result["remaining_gb"] = remaining_gb
                 result["message"] = "대시보드 확인 완료"
 
-            # 4. 비교 로깅
+            # 5. 비교 로깅
             _log_comparison(result)
 
             await browser.close()
@@ -133,7 +150,7 @@ async def check_dataimpulse_usage(cdp_url: str = "http://127.0.0.1:9222") -> dic
 
 
 def _log_fallback_status(result: dict):
-    """Turnstile 차단 시 fallback 상태 로깅."""
+    """프록시 차단 시 fallback 상태 로깅."""
     tracked = get_traffic_summary()
     logger.info(
         f"📊 DataImpulse fallback: {result.get('message', '알 수 없음')} | "

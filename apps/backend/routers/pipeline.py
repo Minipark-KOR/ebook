@@ -390,18 +390,10 @@ async def start_pipeline(req: StartPipelineRequest):
     # 2. URL 파싱
     source, novel_id, bo_table = parse_url(req.url)
     if not source or not novel_id:
-        # 실제 등록된 도메인 목록을 동적으로 표기 (하드코딩 방지)
-        from lib.sources import load_sources
-        try:
-            registered = sorted(
-                d for cfg in load_sources().values() for d in cfg.domains
-            )
-        except Exception:
-            registered = []
-        example = ", ".join(registered[:4]) or "sources.json 등록 도메인"
+        # 도메인은 자주 바뀌므로 목록을 명시하지 않는다 (sources.json 기준 자동 판정)
         raise HTTPException(
             status_code=400,
-            detail=f"지원하지 않는 URL 형식입니다. 등록된 도메인({example} 등)의 작품 URL이어야 합니다.",
+            detail="지원하지 않는 URL 형식입니다. sources.json에 등록된 도메인의 작품 URL이어야 합니다.",
         )
 
     # 3. 중복 시작 방지

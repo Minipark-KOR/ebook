@@ -1,6 +1,6 @@
 {
   "bookto31": {
-    "domains": ["23.ondobook.net", "bookto31.com"],
+    "domains": ["23.ondobook.net"],
     "base_url": "https://23.ondobook.net",
     "collector": "bookto31",
     "discover": "gnuboard",

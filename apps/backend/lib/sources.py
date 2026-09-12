@@ -10,7 +10,7 @@ sources.json 하나로 소스 추가/도메인 변경/수집기 지정을 코드
 sources.json 형식:
     {
       "bookto31": {
-        "domains": ["23.ondobook.net", "bookto31.com"],  # URL 매칭용 도메인 목록
+        "domains": ["23.ondobook.net"],  # URL 매칭용 도메인 목록 (이전 URL은 폐기)
         "base_url": "https://23.ondobook.net", # 크롤링 베이스 URL
         "collector": "bookto31",           # COLLECTORS 등록 키
         "discover": "gnuboard",            # discover 전략
@@ -34,7 +34,7 @@ _SOURCES_FILE = Path(__file__).resolve().parent.parent / "sources.json"
 # 소스가 없을 때 기본값 (sources.json 실패 시에도 동작 보장)
 _DEFAULT_SOURCES = {
     "bookto31": {
-        "domains": ["23.ondobook.net", "bookto31.com"],
+        "domains": ["23.ondobook.net"],
         "base_url": "https://23.ondobook.net",
         "collector": "bookto31",
         "discover": "gnuboard",
@@ -118,11 +118,26 @@ def get_base_url(source: str) -> str:
     return f"https://{source}.com"
 
 
-def update_base_url(source: str, new_base_url: str) -> bool:
+def _domain_host(domain: str) -> str:
+    """도메인 항목(호스트명 또는 전체 URL)에서 호스트만 추출. 실패 시 빈 문자열."""
+    d = (domain or "").strip()
+    if not d:
+        return ""
+    if "://" in d:
+        try:
+            return (urlparse(d).hostname or "").lower()
+        except Exception:
+            return ""
+    return d.lower().rstrip("/")
+
+
+def update_base_url(source: str, new_base_url: str, discard_old: bool = True) -> bool:
     """소스의 base_url을 sources.json에 영속화 (백업 + 원자적 쓰기).
 
     사이트 도메인 변경(리다이렉트 감지/페일오버) 시 자동 갱신용.
-    신규 호스트는 domains 맨 앞에도 추가해 후보/매칭에 포함시킨다.
+    신규 호스트는 domains 맨 앞에 추가하고, discard_old=True(기본)이면
+    이전(base_url) 호스트를 domains에서 폐기한다.
+    (사이트가 다른 URL로 넘어가면 이전 URL은 죽은 것으로 간주 — 남기지 않음)
     실패(소스 없음/형식 오류) 시 False, 무변경/성공 시 True.
     """
     new_base_url = (new_base_url or "").rstrip("/")
@@ -150,9 +165,14 @@ def update_base_url(source: str, new_base_url: str) -> bool:
         return True
 
     raw[source]["base_url"] = new_base_url
-    domains = raw[source].get("domains", [])
-    if host not in domains:
-        raw[source]["domains"] = [host] + list(domains)
+    if discard_old:
+        # 사이트가 새 URL로 넘어가면 이전 URL은 폐기 — 새 호스트만 남긴다.
+        raw[source]["domains"] = [host]
+    else:
+        domains = raw[source].get("domains", [])
+        if host not in [_domain_host(d) for d in domains]:
+            domains = [host] + list(domains)
+        raw[source]["domains"] = domains
 
     try:
         if _SOURCES_FILE.exists():
@@ -161,7 +181,10 @@ def update_base_url(source: str, new_base_url: str) -> bool:
             json.dumps(raw, ensure_ascii=False, indent=2) + "\n",
             encoding="utf-8",
         )
-        logger.info("sources.json 갱신: [%s] base_url %s → %s", source, old, new_base_url)
+        logger.info(
+            "sources.json 갱신: [%s] base_url %s → %s (domains=%s)",
+            source, old, new_base_url, raw[source]["domains"],
+        )
         return True
     except Exception as e:
         logger.warning("sources.json 쓰기 실패 (%s): %s", source, e)

@@ -66,13 +66,16 @@
 ### 2.3 조합 전략
 
 ```
-Primary:   MaskProxy ($0.87/GB)  ← 더 저렴
-Fallback:  DataImpulse ($1/GB)   ← 백업
+Primary:   DataImpulse ($1/GB)   ← 주력 (50GB 충전분 소모, __cr.kr 한국 IP 회전)
+Fallback:  MaskProxy ($0.87/GB)  ← 폴백 (toki31 접속이 불안정해 주력에서 제외)
 ```
 
-- 50MB/월 기준: 두 서비스 모두 사실상 무료 수준
-- 중복성 확보: 하나가 차단되면 다른 것으로 전환
-- IP 풀 다양성: 서로 다른 ASN/통신사 IP 사용
+- **2026-09-12 변경**: DataImpulse 주력 + MaskProxy 폴백으로 전환
+  - DataImpulse는 username에 `__cr.kr` 접미어 필수 (한국 IP targeting)
+  - MaskProxy는 toki31 접속 시 Page.goto 타임아웃 발생 → 폴백으로만 사용
+  - 코드: `lib/toki31_playwright.py`의 `_PROXY_PRIORITY = ("dataimpulse", "maskproxy")`
+- 중복성 확보: 주력 실패 시 폴백으로 자동 전환 (`_resolve_proxy`)
+- IP 풀 다양성: DataImpulse __cr.kr이 한국 ISP IP를 회전
 
 ## 3. 아키텍처
 
@@ -474,3 +477,42 @@ def test_toki31_chapter_with_proxy():
 3. `.env` 파일에 프록시 키 입력
 4. `python scripts/test_proxy.py`로 연결 테스트
 5. toki31 본문 수집 테스트
+
+---
+
+## 6. 운영 현황 (2026-09-12)
+
+> Playwright 기반 `lib/toki31_playwright.py`로 전환 후 실측 결과. (curl_cffi 설계는 이전 방식)
+
+### 6.1 프록시 운영
+- **DataImpulse 주력** (`__cr.kr` 한국 IP 회전), **MaskProxy 폴백** (`_PROXY_PRIORITY`)
+- 자격증명: `apps/backend/.env.local` (시크릿, gitignore)
+  - `DATAIMPULSE_USER/PASS/HOST/PORT`, `MASKPROXY_USER/PASS/HOST/PORT`
+  - DataImpulse user에 `__cr.kr` 접미어 자동 부여 (`_resolve_proxy`)
+- **toki31 접근**: DataImpulse로만 성공. MaskProxy는 Page.goto 타임아웃(불안정)
+
+### 6.2 수집 실측 (화산귀환 3회차 테스트)
+- 평균 **0.92MB/회차** (콜드 ~1.1MB / 웜 ~1.0MB) — 50GB ≈ 5만 회차 수용
+- **toki31은 anti-bot으로 매 챕터 JS/wasm을 재다운로드** → 캐시 불가, ~1MB가 정상 비용
+- `ad_guard_bg.wasm`(403KB/챕터)은 콘텐츠 추출에 **필수** (차단 시 novel-content API 미발동)
+- **회차 트래픽 상한** (안전장치, 정상 챕터 차단 방지):
+  - 콜드 **2.5MB** / 웜 **2.0MB** (`TOKI31_CHAPTER_COLD_MAX_MB` / `TOKI31_CHAPTER_WARM_MAX_MB`)
+  - novel-content 페이로드 상한 60KB (`TOKI31_CONTENT_MAX_KB`)
+- **트래픽 실측**: 캐시 히트(`responseStart-requestStart < 1ms`)는 집계 제외
+  (안 하면 JS 재다운로드를 과대계상해 웜 상한 오차단)
+
+### 6.3 등장 작품의 toki31 novel_id
+| 작품 | toki31 novel_id | 비고 |
+|---|---|---|
+| 화산귀환 | 57277 | |
+| 게임 속 바바리안으로 살아남기 | 20 | |
+| 아포칼립스의 고인물 | 58455 | |
+
+> novel_id 검색법: `toki31.com/search`에서 **URL 파라미터는 무시되고**, 검색창에 직접
+> 타이핑 후 Enter 해야 결과가 나온다 (Next.js 클라이언트 검색). 결과 `/novel/{id}` 링크 확인.
+
+### 6.4 누락 챕터 toki31 폴백 수집
+- ondobook(bookto31)에 없는 챕터(빈 챕터/누락)는 toki31이 보유할 수 있음
+  - 예: 화산귀환 1342/1345는 ondobook에 본문 없음 → **toki31에 정상 존재**(6263자/5407자)
+- 절차: novel_id에서 episode_id 확보(`/novel/{id}`의 `data-episode-id`) →
+  `fetch_chapter_content_full(novel_id, episode_id)`로 수집 → `save_chapter(source='toki31')`

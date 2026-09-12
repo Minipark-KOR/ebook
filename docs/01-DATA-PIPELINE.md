@@ -116,6 +116,13 @@ result = await fetch_chapter_content_full(novel_id, episode_id)
 # (venv에 playwright + cryptography 필요)
 ```
 
+> **toki31 프록시/트래픽 (2026-09-12)**:
+> - 프록시: **DataImpulse 주력**(`__cr.kr` 한국 IP 회전) + MaskProxy 폴백 (`_PROXY_PRIORITY`)
+> - 회차당 실측 **~0.9~1.6MB** (toki31이 JS/wasm을 매 챕터 재다운로드 — anti-bot, 캐시 불가)
+> - 회차 상한: 콜드 2.5MB / 웜 2.0MB (정상 챕터 차단 방지용 안전장치)
+> - 브라우저 재사용(싱글턴) + 리소스 차단(media/CSS/이미지)으로 절약
+> - `ad_guard_bg.wasm`은 콘텐츠 추출 필수(차단 불가) — 상세: [10-TOKI31-PROXY-IMPLEMENTATION.md](10-TOKI31-PROXY-IMPLEMENTATION.md)
+
 ### Step 3: enrich
 - namu.wiki에서 작가/표지/장르/설명/연재상태 수집
 - `namu_attempted` 플래그로 **1회만** 시도 (중복 방지)

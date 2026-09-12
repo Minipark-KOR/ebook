@@ -75,9 +75,21 @@ def _sd_notify(state: str = "") -> None:
 
 
 def _write_status(data: dict) -> None:
-    """진행 상황을 status.json에 기록 (loop/collect가 주기적으로 호출)."""
+    """진행 상황을 status.json에 기록 (loop/collect가 주기적으로 호출).
+
+    domain_health(도메인 헬스) 등 모니터링 필드는 새 데이터에 없으면
+    기존 값을 보존한다 — collect 상태 기록이 헬스 결과를 덮어쓰지 않도록.
+    """
     try:
         data = dict(data)
+        if "domain_health" not in data:
+            try:
+                if STATUS_FILE.exists():
+                    prev = json.loads(STATUS_FILE.read_text(encoding="utf-8"))
+                    if isinstance(prev, dict) and prev.get("domain_health"):
+                        data["domain_health"] = prev["domain_health"]
+            except Exception:
+                pass
         data["updated_at"] = datetime.now(timezone.utc).isoformat()
         STATUS_FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2))
     except Exception as e:

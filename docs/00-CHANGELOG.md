@@ -2,6 +2,26 @@
 
 > ebooklib의 모든 주요 변경 사항. 최신이 위.
 
+## 2026-09-12 (검증 보강)
+
+### 버그 수정 (양방향 검증 과정에서 발견)
+- **빈 챕터로 백필 정체**: 사이트에 본문이 없는 챕터(예: ondobook 1345화=wr_id 637395)를
+  FlareSolverr rate limit(8분)×3회×3사이클로 재시도 → ~72분 정체
+  → **빈 본문(사이트에 내용 없음)은 재시도 생략 + 1회 실패로 즉시 DLQ** (백필 정체 방지)
+- **저장 url 하드코딩**: `save_chapter`가 url을 `https://{source}.com/...`로 고정 → 도메인 변경 후
+  저장 url이 죽은 주소 가리킴 → **`get_base_url(source)` 기반으로 수정** (`_source_chapter_url`)
+- **챕터 번호 오탐**: `_extract_chapter_num`의 MULTILINE 폴백이 본문 중간 "N화" 언급을 잡아
+  check-dupes 오탐 + 저장 보정 오작동 위험 → **엄격한 첫 줄 추출(`_claimed_chapter_strict`) 도입**
+- **domain_health 덮어쓰기**: collect의 status 기록이 도메인 헬스 결과를 지움
+  → **`_write_status`가 domain_health 기존 값 보존** (모니터링 지속)
+
+### 양방향 검증 결과 (정방향/역방향)
+- 정방향(설정→동작): sources.json → `load_sources`/`get_base_url`/`candidate_bases`/URL매칭 전부 통과
+- 역방향(동작→설정): 저장 챕터 url이 설정 base_url과 일치 (ondobook 수집분 23.ondobook.net)
+- 전 소설 check-dupes: 중복 0, 챕터 번호 불일치 0
+- 도메인 헬스: bookto31/toki31/newto31 모두 `ok` (FlareSolverr 복구 반영)
+- 백필(화산귀환 0~1344화): 빈 챕터 1345만 DLQ, 나머지 정상 진행
+
 ## 2026-09-12 (최신)
 
 ### 북토끼 도메인 변경: bookto31.com → 23.ondobook.net

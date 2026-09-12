@@ -2,6 +2,22 @@
 
 > ebooklib의 모든 주요 변경 사항. 최신이 위.
 
+## 2026-09-12 (백엔드 서비스화 + 미등록 도메인 검증)
+
+### 백엔드 systemd 서비스화 (ebook-api.service)
+- **8089 백엔드**: 분리 실행(orphan) → **systemd user 서비스로 전환** (`ebook-api.service`)
+  - 오류나는 `pkill ExecStartPre` 제거 (systemd가 PID 직접 관리 — 중복 프로세스/바인딩 충돌 방지)
+  - 재시작 검증: `restart` → active + 8089 200 + uvicorn 1개 (중복 없음)
+- **제출 URL 로깅**: `pipeline/start` 요청 URL을 로그에 기록 (도메인 변경 추적)
+  - `log.info("pipeline/start 요청 URL: %s", req.url)` — 비밀번호 검증 후 기록
+
+### 미등록 도메인 자동 분석/등록 양방향 검증
+- **단위 테스트 5종 통과**: bookto31/toki31 패턴 등록, 등록 후 재파싱, 등록 도메인 no-op,
+  비인지 URL None, (verify=True 가짜 도메인 → None, 크래시/오탑 없음)
+- **정방향**: 배포 프록시 Content-Type 수정 확인 (잘못된 pw → 403, 422 아님)
+- **역방향**: 실 sources.json 무결성 (도메인 정상, .bak 무생성)
+- **런타임**: 백엔드 active/200, 루프 정상(ch~1171)
+
 ## 2026-09-12 (미등록 도메인 자동 분석)
 
 ### 도메인 수시 변경 대응 — 미등록 도메인 자동 판별/등록

@@ -252,7 +252,12 @@ def parse_chapter_body(html: str) -> str:
 
 
 def _extract_book_text_viewer(html: str) -> Optional[str]:
-    """본문 영역(<div class="view-content book-text-viewer">)을 중첩 div 안전 추출.
+    """본문 영역(<div class="view-content ...">)을 중첩 div 안전 추출.
+
+    사이트별 클래스 변형을 지원:
+    - bookto31: "view-content book-text-viewer"
+    - ondobook(23.ondobook.net): "view-content" (단독)
+    우선순위: book-text-viewer 포함 → 일반 view-content 순.
 
     단순 .*?</div>는 중첩 div가 있으면 첫 </div>에서 잘린다.
     태그 파서로 div depth를 추적해 본문 div의 전체 내부를 반환한다.
@@ -262,11 +267,15 @@ def _extract_book_text_viewer(html: str) -> Optional[str]:
     """
     import re
 
-    # 본문 시작 div 탐색
-    start_m = re.search(
-        r'<div[^>]*class="view-content book-text-viewer"[^>]*>',
-        html, re.IGNORECASE | re.DOTALL,
-    )
+    # 본문 시작 div 탐색 (1) book-text-viewer 포함, (2) 일반 view-content
+    start_m = None
+    for pattern in (
+        r'<div[^>]*class="[^"]*view-content[^"]*book-text-viewer[^"]*"[^>]*>',
+        r'<div[^>]*class="[^"]*view-content[^"]*"[^>]*>',
+    ):
+        start_m = re.search(pattern, html, re.IGNORECASE | re.DOTALL)
+        if start_m:
+            break
     if not start_m:
         return None
     start = start_m.end()

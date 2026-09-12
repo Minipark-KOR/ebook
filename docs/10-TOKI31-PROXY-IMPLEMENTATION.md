@@ -491,6 +491,17 @@ def test_toki31_chapter_with_proxy():
   - DataImpulse user에 `__cr.kr` 접미어 자동 부여 (`_resolve_proxy`)
 - **toki31 접근**: DataImpulse로만 성공. MaskProxy는 Page.goto 타임아웃(불안정)
 
+> ⚠️ **MaskProxy 폴백 이슈 (2026-09-12 확인)**
+> - 자격증명 폴백 **로직은 정상**: DataImpulse 자격증명 없으면 MaskProxy 선택됨 (단위 테스트 확인)
+> - 그러나 MaskProxy가 **HTTP 407 인증 거부** (`97038268-res:zacletal` 거부됨):
+>   - TCP 1288 연결은 되지만 CONNECT 시 `407 Proxy Authentication Required`
+>   - toki31/일반 사이트 모두 접속 불가 (폴백이 실제로는 무의미)
+> - 원인 추정: 서버 IP **허용목록(allowlist) 미등록** 또는 계정 미활성화/자격증명 오류
+>   - 서버 공인 IP: `curl https://api.ipify.org` → 104.28.207.60 (확인 필요)
+> - **런타임 폴백 미구현**: `_resolve_proxy`는 자격증명 기준 선택뿐, DataImpulse가
+>   실행 중 연결 실패해도 MaskProxy로 전환하지 않음 (추후 구현 검토)
+> - 처리: MaskProxy 계정 허용목록/자격증명 확인 후 재테스트 예정
+
 ### 6.2 수집 실측 (화산귀환 3회차 테스트)
 - **웜 회차 평균 ~0.19MB** (콜드 ~0.75~0.94MB / 웜 184~190KB) — 50GB ≈ 27만 회차 수용
 - toki31의 JS 청크(~840KB)와 ad_guard_bg.wasm(403KB)는 **로컬 캐시 재서빙**으로 절약:

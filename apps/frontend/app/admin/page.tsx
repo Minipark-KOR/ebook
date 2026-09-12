@@ -219,7 +219,7 @@ export default function AdminPage() {
               className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
             />
             <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
-              지원: 23.ondobook.net / bookto31.com / newto31.com / newtoki31.com / toki31.com
+              지원: 23.ondobook.net / newto31.com / toki31.com / newtoki31.com
             </p>
           </div>
 

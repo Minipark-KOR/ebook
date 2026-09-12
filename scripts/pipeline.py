@@ -446,7 +446,22 @@ def discover_toki31(novel_id: int, novel_title: str = "", dry_run: bool = False)
                     auto_update_base("toki31", f"{_toki_base()}/novel/{novel_id}", pg.url)
                 except Exception:
                     pass
-                title = (await pg.title()).split("|")[0].strip()
+                title = await pg.title()
+                if ' - ' in title:
+                    parts = title.split(' - ')
+                    if len(parts) >= 2:
+                        title = parts[1].split('|')[0].strip()
+                else:
+                    title = title.split('|')[0].strip()
+                if not title:
+                    try:
+                        page_html = await pg.content()
+                        import re as _re
+                        og_m = _re.search(r'<meta property="og:title" content="([^"]+)"', page_html)
+                        if og_m:
+                            title = og_m.group(1).strip()
+                    except Exception:
+                        pass
                 if only_title:
                     await b.close()
                     return title, {}

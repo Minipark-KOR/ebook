@@ -2,6 +2,24 @@
 
 > ebooklib의 모든 주요 변경 사항. 최신이 위.
 
+## 2026-09-12 (toki31 ad_guard 캐시)
+
+### ad_guard_bg.wasm 로컬 캐시 재서빙 (403KB/회차 절약)
+- **문제**: toki31의 anti-adblock `ad_guard_bg.wasm`(403KB)이 매 챕터 재다운로드.
+  차단하면 본문 추출이 실패(콘텐츠에 필수) → 차단 불가
+- **해법 (웹 조사: Playwright route.fulfill WASM 모킹 패턴)**: 차단 대신
+  **첫 요청만 실다운로드 → 메모리 캐시 → 이후 요청은 `route.fulfill`로 재서빙**
+  - JS에는 정상 wasm 응답으로 보여 anti-adblock 탐지도 트리거 안 함
+  - 캐시된 wasm은 0 네트워크 → 웜 회차 ~400KB 절약 (1.0MB → 0.42~0.67MB)
+- **트래커 차단**: `whoas.xyz` 등 트래커/광고 도메인 `route.abort()`
+- **계상**: 캐시 재서빙 wasm은 `route.fulfill` 응답(requestStart=-1)이라 timing 판정 불가
+  → URL 마커(`ad_guard_bg.wasm`)로 직접 계상 제외 (첫 1회 실다운로드도 제외 — 무시 가능 수준)
+- **버그 수정**: `route.fulfill(contentType=...)` → `content_type` (Playwright Python snake_case)
+
+### 검증 (화산귀환 toki31 3챕터)
+- 콜드 666KB / 웜 422KB·673KB — 모두 본문 정상 추출 (5696/6263/5407자)
+- ad_guard_bg.wasm 캐시 히트로 웜 회차 ~400KB 절약 확인
+
 ## 2026-09-12 (toki31 검증 보강)
 
 ### 캐시 히트 계상 제외 보정

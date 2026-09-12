@@ -55,6 +55,16 @@ _PROXY_DEFAULTS = {
 # 본문 추출에 불필요한 리소스 → 차단 (트래픽 절약)
 _BLOCKED_RESOURCE_TYPES = ("image", "font", "media", "stylesheet")
 
+# 트래커/광고 도메인 → 차단 (본문 추출과 무관, 네트워크 절약)
+# 실측: whoas.xyz/live/track.js 등. 정확한 매칭으로 오차단 방지.
+_TRACKER_DOMAINS = ("whoas.xyz",)
+
+# ad_guard_bg.wasm(403KB/회차, 사이트 anti-adblock): 차단하면 본문 추출이 실패하므로
+# **차단하지 않고 로컬 캐시로 재서빙**한다 (첫 회차 1회 다운로드 → 이후 0 네트워크).
+# WebAssembly.instantiateStreaming으로 로드되는 JS에는 정상 응답으로 보이므로
+# anti-adblock 탐지도 트리거하지 않는다. (Playwright route.fulfill 패턴)
+_WASM_CACHE_URL_MARKER = "ad_guard_bg.wasm"
+
 # 프록시 인증/연결 실패 시 브라우저 리셋 임계값
 _RESET_AFTER_CONSECUTIVE_FAILURES = 3
 
@@ -204,6 +214,7 @@ class Toki31Collector:
         self._consecutive_failures = 0
         self._traffic_total = 0  # 프록시로 받은 총 응답 바이트 (실측, 수명 누적)
         self._is_cold = True  # 브라우저 첫 로드 여부 (JS 번들 전체 다운로드 → 상한 높게)
+        self._wasm_cache = {}  # ad_guard_bg.wasm url → bytes (챕터 간 재서빙)
         self._resolve_proxy()
 
     # --- 프록시 ---
@@ -266,6 +277,11 @@ class Toki31Collector:
             # 캐시 히트(디스크/메모리)는 네트워크 바이트가 0이므로 집계 제외 —
             # 안 그러면 브라우저 재사용 시 JS 재다운로드가 실제보다 크게 잡혀
             # 웜 상한을 오초과해 정상 챕터가 차단된다.
+            # ad_guard_bg.wasm은 캐시 재서빙(route.fulfill)으로 네트워크 바이트가
+            # 0 (첫 1회만 실다운로드). route.fulfill 응답은 requestStart=-1이라
+            # timing 기반 캐시 판정이 안 되므로 URL로 직접 제외.
+            if _WASM_CACHE_URL_MARKER in response.url:
+                return
             try:
                 tm = response.request.timing
                 if tm:
@@ -312,8 +328,42 @@ class Toki31Collector:
         logger.info("toki31 브라우저 시작 완료 (리소스 차단 + 재사용)")
 
     async def _block_unnecessary(self, route, request):
-        """불필요한 리소스 차단 — 이미지/폰트/미디어/CSS 차단, JS만 허용."""
+        """불필요한 리소스 차단 — 이미지/폰트/미디어/CSS 차단, JS만 허용.
+
+        추가:
+        - 트래커/광고 도메인 차단 (whoas.xyz 등)
+        - ad_guard_bg.wasm(anti-adblock)은 **로컬 캐시 재서빙** — 차단 대신
+          첫 요청만 다운로드해 캐시하고, 이후 요청은 메모리에서 응답한다.
+          (콘텐츠 추출에 필수라 차단 불가하지만 403KB/회차 재다운로드를 없앤다)
+        """
+        url = request.url
         resource_type = request.resource_type
+
+        # 1) 트래커/광고 도메인 차단
+        if any(td in url for td in _TRACKER_DOMAINS):
+            await route.abort()
+            return
+
+        # 2) ad_guard_bg.wasm — 첫 다운로드 후 캐시 재서빙
+        if _WASM_CACHE_URL_MARKER in url:
+            cached = self._wasm_cache.get(url)
+            if cached is not None:
+                await route.fulfill(
+                    status=200,
+                    content_type="application/wasm",
+                    body=cached,
+                )
+                return
+            try:
+                resp = await route.fetch()
+                self._wasm_cache[url] = await resp.body()
+                await route.fulfill(response=resp)
+                return
+            except Exception:
+                # 캐시 실패 시 그대로 통과 (다운로드) — 추출 우선
+                pass
+
+        # 3) 미디어 계열 차단
         if resource_type in _BLOCKED_RESOURCE_TYPES:
             await route.abort()
         else:

@@ -269,8 +269,11 @@ class Toki31Collector:
             try:
                 tm = response.request.timing
                 if tm:
-                    dur = tm.get('responseStart', 0) - tm.get('requestStart', 0)
-                    if dur < 1:  # ~0ms = 캐시 히트
+                    rs = tm.get('responseStart')
+                    rq = tm.get('requestStart')
+                    # 캐시 히트: 두 시각 모두 존재·0 이상이고 요청 지속시간이 ~0ms
+                    if (isinstance(rs, (int, float)) and isinstance(rq, (int, float))
+                            and rs >= 0 and rq >= 0 and (rs - rq) < 1):
                         return
             except Exception:
                 pass

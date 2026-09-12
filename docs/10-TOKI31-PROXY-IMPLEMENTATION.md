@@ -494,7 +494,11 @@ def test_toki31_chapter_with_proxy():
 ### 6.2 수집 실측 (화산귀환 3회차 테스트)
 - 평균 **0.92MB/회차** (콜드 ~1.1MB / 웜 ~1.0MB) — 50GB ≈ 5만 회차 수용
 - **toki31은 anti-bot으로 매 챕터 JS/wasm을 재다운로드** → 캐시 불가, ~1MB가 정상 비용
-- `ad_guard_bg.wasm`(403KB/챕터)은 콘텐츠 추출에 **필수** (차단 시 novel-content API 미발동)
+- `ad_guard_bg.wasm`(403KB/챕터, 사이트 anti-adblock)은 본문 추출에 **필수**
+  - 차단하면 novel-content API 미발동 → **차단 대신 로컬 캐시 재서빙**
+  - 첫 1회만 실다운로드 → 메모리 캐시 → 이후 `route.fulfill`로 0네트워크 재서빙
+    (JS에 정상 응답으로 보여 anti-adblock 탐지 안 트리거, 웜 회차 ~400KB 절약)
+- **트래커/광고 도메인**(`whoas.xyz` 등)은 `route.abort()`로 차단
 - **회차 트래픽 상한** (안전장치, 정상 챕터 차단 방지):
   - 콜드 **2.5MB** / 웜 **2.0MB** (`TOKI31_CHAPTER_COLD_MAX_MB` / `TOKI31_CHAPTER_WARM_MAX_MB`)
   - novel-content 페이로드 상한 60KB (`TOKI31_CONTENT_MAX_KB`)

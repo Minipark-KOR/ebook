@@ -212,10 +212,10 @@ export default function AdminPage() {
             </label>
             <input
               id="url"
-              type="url"
+              type="text"
               value={url}
               onChange={(e) => setUrl(e.target.value)}
-              placeholder="https://23.ondobook.net/bbs/board.php?bo_table=novel&wr_id=25575"
+              placeholder="작품 페이지 URL (예: https://.../?bo_table=novel&wr_id=4419)"
               className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
             />
             <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">

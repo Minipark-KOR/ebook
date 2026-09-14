@@ -13,6 +13,10 @@
 > Vercel의 `/api/*`는 `app/api/[...slug]/route.ts` catch-all이 **devforge 백엔드로 프록시**한다.
 > (Neon DB 미사용 — 2026-09-09부터 단일 데이터 소스로 통일)
 
+### 저장소
+- **ebooklib**: 별도 저장소 (`/opt/workspace/ebooklib/`)
+- minihome 모노레포와 독립적으로 관리됨
+
 ### 시스템 요구사항
 - **devforge 서버** (FlareSolverr + FastAPI):
  - ARM64 또는 x86_64 Linux

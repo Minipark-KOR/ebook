@@ -195,6 +195,8 @@ def get_novel_detail(novel_id: str) -> Optional[dict]:
     if meta_file.exists():
         with open(meta_file, "r", encoding="utf-8") as f:
             meta = json.load(f)
+        if not meta.get("id"):
+            meta["id"] = novel_id
         # 챕터 수는 실제 파일 기준으로 갱신 (meta.json, 인덱스 제외)
         chapters = [f for f in novel_dir.glob("*.json")
                     if f.name not in ("meta.json", CHAPTERS_INDEX_FILE)]

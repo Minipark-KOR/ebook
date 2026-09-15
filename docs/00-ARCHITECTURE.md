@@ -9,9 +9,10 @@ ebooklib은 한국 웹소설을 자동으로 수집 → JSON 저장 → EPUB으�
 ### 핵심 기능
 1. **수집**: Cloudflare 보호 사이트(북토끼/23.ondobook.net, 뉴토끼/toki31.com)에서 챕터 본문 크롤링
 2. **저장**: 챕터를 JSON 파일로 `/opt/ai_data/flaresolverr/novels/` 에 저장
-3. **읽기**: Next.js 프론트엔드에서 챕터 단위로 표시 (ISR로 CDN 캐시)
-4. **EPUB**: 전체 소설을 하나의 EPUB 파일로 묶어서 다운로드 제공 (한글 폰트 임베드)
-5. **자동화**: Admin 페이지에서 URL 입력 → 파이프라인 자동 실행
+3. **인덱싱**: SQLite DB(`ebooklib.db`)에 메타데이터 + 챕터 인덱스 저장 (빠른 조회)
+4. **읽기**: Next.js 프론트엔드에서 챕터 단위로 표시 (ISR로 CDN 캐시)
+5. **EPUB**: 전체 소설을 하나의 EPUB 파일로 묶어서 다운로드 제공 (한글 폰트 임베드)
+6. **자동화**: Admin 페이지에서 URL 입력 → 파이프라인 자동 실행
 
 ### 비기능 요구사항
 - **봇 탐지 회피**: Cloudflare Turnstile을 우회하면서 합법적인 사용자처럼 행동
@@ -55,14 +56,17 @@ ebooklib은 한국 웹소설을 자동으로 수집 → JSON 저장 → EPUB으�
 │  Playwright (newtoki AES-GCM 복호화)                              │
 └─────────────────────────────────────────────────────────────────┘
             │
-            │ 파일 읽기 (data.py → 인덱스 캐시)
+            │ 파일 읽기 (data.py → SQLite 인덱스 쿼리 + TTL 캐시)
             ▼
 ┌─────────────────────────────────────────────────────────────────┐
 │              로컬 데이터 스토리지 (/opt/ai_data/)                  │
 │  /opt/ai_data/flaresolverr/novels/{소설명}/                       │
 │      ├── meta.json              (소설 메타데이터)                  │
-│      ├── {wr_id}.json           (챕터별 본문 - 파일)               │
-│      └── _chapters_index.json   (회차 목록 인덱스 캐시)            │
+│      └── {wr_id}.json           (챕터별 본문 - 파일)               │
+│  /opt/ai_data/flaresolverr/ebooklib.db                           │
+│      ├── novels                 (소설 메타데이터 테이블)            │
+│      ├── chapters               (챕터 인덱스 테이블)              │
+│      └── reading_progress       (읽기 진행상황 테이블)             │
 │  /opt/ai_data/flaresolverr/rate_limiter.db                       │
 │      (URL별 마지막 요청 시각 기록)                                  │
 │  /opt/ai_data/flaresolverr/ebook_watcher/                        │
@@ -135,12 +139,13 @@ COLLECTORS = {
 │   │   │   ├── metadata.py
 │   │   │   └── pipeline.py          # 파이프라인 시작/상태 API
 │   │   ├── services/                # 비즈니스 로직
-│   │   │   ├── data.py              # JSON 파일 읽기 (인덱스 캐시)
+│   │   │   ├── data.py              # SQLite 인덱스 쿼리 + TTL 캐시
 │   │   │   ├── epub.py              # EPUB 생성 (한글 4폰트 임베드)
 │   │   │   ├── bookto31.py          # 북토끼 크롤러 (FlareSolverrSession)
 │   │   │   ├── metadata.py          # 메타데이터 검색
 │   │   │   └── metadata_namu.py     # namu.wiki 메타데이터
 │   │   └── lib/                     # 공통 레이어
+│   │       ├── database.py          # SQLite 스키마 + 연결 관리
 │   │       ├── domain_router.py     # 도메인 자동 전환/감지 (리다이렉트·페일오버·헬스체크)
 │   │       ├── flaresolverr_client.py # FlareSolverr 세션 관리
 │   │       ├── sources.py           # 소스 레지스트리 (sources.json 로드/검증 + base_url 자동 갱신)
@@ -163,6 +168,7 @@ COLLECTORS = {
 │   │
 ├── scripts/
 │   ├── pipeline.py                  # 파이프라인 (discover/collect/enrich/index/revalidate/loop)
+│   ├── migrate_json_to_sqlite.py    # JSON → SQLite 마이그레이션 스크립트
 │   ├── json_to_epub.py              # 독립 실행 EPUB 변환기
 │   └── fonts/                       # EPUB 한글 폰트
 ```
@@ -247,7 +253,8 @@ COLLECTORS = {
 
 ### 2. 저장 단계
 - 챕터 JSON 파일을 `/opt/ai_data/flaresolverr/novels/{소설명}/`에 저장
-- `data.py`가 인덱스 캐시(`_chapters_index.json`)를 읽어서 API 응답으로 제공
+- 챕터 데이터를 SQLite DB(`chapters` 테이블)에 인덱싱
+- `data.py`가 SQLite 인덱스를 쿼리하여 API 응답으로 제공 (TTL 캐시 포함)
 
 ### 3. 읽기 단계
 - Next.js 페이지가 ISR로 정적 생성되어 CDN에서 0ms 서빙
@@ -266,6 +273,7 @@ COLLECTORS = {
 - **Python 3.9**
 - **FastAPI** - REST API 프레임워크
 - **Pydantic** - 데이터 검증
+- **SQLite** - 경량 데이터베이스 (인덱스 + TTL 캐시)
 - **ebooklib** - EPUB 생성
 - **requests** - HTTP 클라이언트
 - **Playwright** - 브라우저 자동화 (뉴토끼 우회)

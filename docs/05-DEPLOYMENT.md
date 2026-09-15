@@ -9,6 +9,10 @@
 - **백엔드 API**: devforge (Oracle Cloud) — FastAPI @ `127.0.0.1:8089`, Caddy(nip.io)로 공개
 - **FlareSolverr**: devforge 로컬 서버 (Podman Quadlet)
 - **데이터 스토리지**: devforge 로컬 파일시스템 (`/opt/ai_data/`)
+  - `ebooklib.db`: SQLite 데이터베이스 (WAL 모드, 소설/챕터 인덱스)
+  - `novels/`: JSON 챕터 파일
+  - `epub/`: EPUB 캐시
+  - `covers/`: 표지 이미지
 
 > Vercel의 `/api/*`는 `app/api/[...slug]/route.ts` catch-all이 **devforge 백엔드로 프록시**한다.
 > (Neon DB 미사용 — 2026-09-09부터 단일 데이터 소스로 통일)
@@ -115,6 +119,23 @@ setsid nohup venv/bin/python -m uvicorn main:app --host 0.0.0.0 --port 8089 \
 
 # 검증
 curl http://127.0.0.1:8089/api/novels | head -c 200
+curl http://127.0.0.1:8089/health
+```
+
+### 4. SQLite 데이터베이스
+
+백엔드는 SQLite를 사용하여 빠른 인덱싱과 캐시를 제공합니다:
+
+```bash
+# DB 초기화 (앱 시작 시 자동 실행)
+cd /opt/workspace/ebooklib/apps/backend
+venv/bin/python -c "from lib.database import init_db; init_db()"
+
+# 수동 마이그레이션 (JSON → SQLite)
+venv/bin/python scripts/migrate_json_to_sqlite.py
+
+# DB 확인
+sqlite3 /opt/ai_data/flaresolverr/ebooklib.db "SELECT COUNT(*) FROM chapters;"
 ```
 
 ## 로컬 FlareSolverr 배포

@@ -2,6 +2,39 @@
 
 > ebooklib의 모든 주요 변경 사항. 최신이 위.
 
+## 2026-09-15 (SQLite 데이터베이스 마이그레이션)
+
+### JSON 파일 → SQLite 마이그레이션
+- **데이터베이스**: `/opt/ai_data/flaresolverr/ebooklib.db` — SQLite WAL 모드
+  - `novels` 테이블: 7개 소설 메타데이터 (id, title, author, source, media_type, meta_json)
+  - `chapters` 테이블: 4,686개 챕터 인덱스 (wr_id, chapter, title, content_length, source, url, collected_at)
+  - `reading_progress` 테이블: 읽기 진행상황
+  - 인덱스: `idx_chapters_novel_id`, `idx_chapters_wr_id`, `idx_novels_source`
+- **`lib/database.py`**: SQLite 스키마 정의 + `get_connection()` + `init_db()` 함수
+- **`services/data.py` 완전 재작성**: JSON 파일 읽기 → SQLite 인덱스 쿼리
+  - `get_novel_list()`: `SELECT * FROM novels` + TTL 캐시 5분
+  - `get_novel_detail()`: 단일 소설 조회
+  - `get_chapters_index()`: `SELECT * FROM chapters WHERE novel_id=? ORDER BY chapter` + TTL 캐시 10분
+  - `get_chapter_detail()`: 단일 챕터 조회 (본문은 JSON 파일에서 직접 읽기)
+  - `resolve_status()`: 소설 연재상태 판정 (meta.json 우선, 없으면 수집 이력 fallback)
+- **`scripts/migrate_json_to_sqlite.py`**: 기존 JSON 데이터 → SQLite 마이그레이션 스크립트
+- **`main.py`**: 앱 시작 시 `init_db()` 호출
+
+### 성능 개선
+- **챕터 검색**: O(N) 파일 스캔 → O(1) 인덱스 조회
+- **이전/다음 화**: 전체 디렉토리 정렬 → SQLite 인덱스 쿼리
+- **API 응답 캐시**: 소설 목록 5분, 챕터 상세 10분 TTL 기반 캐시
+
+### 버그 수정
+- **제목 정규화**: "은퇴한 만렙 일꾼은 쉬고 싶다 - 동주 | 뉴토끼" → "은퇴한 만렙 일꾼은 쉬고 싶다" (SQLite 직접 수정)
+- **Frontend Hydration 수정** (`LibraryClient.tsx`): `useSearchParams()`/`useRouter()` 제거 → `useState` 기반 탭 필터링
+
+### 프론트엔드 루트 페이지 변경
+- **`app/page.tsx`**: DevForge 포털 → 라이브러리 메인 페이지 (ISR)
+  - 소설 목록 SSR 페칭 → `LibraryClient` 컴포넌트에 전달
+  - 탭 필터링: 전체/소설/만화/웹툰
+  - 카드 클릭 → `/novel/[id]` 상세 페이지
+
 ## 2026-09-12 (백엔드 서비스화 + 미등록 도메인 검증)
 
 ### 백엔드 systemd 서비스화 (ebook-api.service)

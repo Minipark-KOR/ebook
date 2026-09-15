@@ -11,6 +11,13 @@
 - Content-Type: `application/json` (또는 EPUB의 경우 `application/epub+zip`)
 - 한글이 포함된 문자열은 UTF-8
 
+## 데이터 레이어
+API는 SQLite 데이터베이스(`ebooklib.db`)에서 데이터를 조회합니다:
+- **novels** 테이블: 소설 메타데이터
+- **chapters** 테이블: 챕터 인덱스 (회차번호, 제목, 본문 크기, 수집일시)
+- **reading_progress** 테이블: 읽기 진행상황
+- **TTL 캐시**: 소설 목록 5분, 챕터 상세 10분 (딕셔너리 기반)
+
 ## 엔드포인트
 
 ### 1. GET /health

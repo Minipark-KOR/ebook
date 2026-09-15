@@ -158,6 +158,8 @@ def get_novel_list(media_type: Optional[str] = None) -> list[dict]:
         if meta_file.exists():
             with open(meta_file, "r", encoding="utf-8") as f:
                 meta = json.load(f)
+            if not meta.get("id"):
+                meta["id"] = novel_dir.name
             meta["status"] = resolve_status(meta, novel_dir)
         else:
             # 디렉토리 이름으로 메타데이터 생성

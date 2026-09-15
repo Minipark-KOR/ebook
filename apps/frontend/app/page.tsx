@@ -1,80 +1,32 @@
-import Link from "next/link";
+import { Suspense } from "react";
 import { Novel } from "@/lib/api";
-import { DEVFORGE_BASE, fmtKST, getJSON, NewsHeadline, PortalSummary } from "@/lib/server";
+import LibraryClient from "./LibraryClient";
 
-// ISR: 엣지 캐시 (최대 60s stale). 동적 렌더(요청마다 오리진 왕복) 비용 제거.
-export const revalidate = 60;
+const API_BASE = `${
+  process.env.NEXT_PUBLIC_API_URL || "https://devforge.152-69-229-246.nip.io"
+}/api`;
 
-export default async function PortalHome() {
-  const [summary, novelsRes] = await Promise.all([
-    getJSON<PortalSummary>("/portal/summary", 60),
-    getJSON<{ novels: Novel[] }>("/novels", 300),
-  ]);
+export const revalidate = 300;
 
-  const novels = (novelsRes?.novels || []).slice(0, 3);
-  const news: NewsHeadline[] = (summary?.news || []).slice(0, 3);
-  const ok = summary?.status === "ok";
+async function fetchNovelsServer(): Promise<Novel[]> {
+  try {
+    const res = await fetch(`${API_BASE}/novels`, {
+      next: { revalidate: 300, tags: ["novels"] },
+      signal: AbortSignal.timeout(10000),
+    });
+    if (!res.ok) return [];
+    const data = await res.json();
+    return data.novels || [];
+  } catch {
+    return [];
+  }
+}
 
-  const card =
-    "rounded-xl border border-gray-200 dark:border-gray-800 p-4 hover:shadow transition";
-  const dim = "text-sm text-gray-600 dark:text-gray-300";
-
+export default async function HomePage() {
+  const novels = await fetchNovelsServer();
   return (
-    <main className="mx-auto w-full max-w-5xl p-6">
-      <header className="flex flex-wrap items-center justify-between gap-2 mb-6">
-        <h1 className="text-2xl font-bold">DevForge</h1>
-        <span className={`${dim} flex items-center gap-2`}>
-          <span
-            className={`inline-block w-2 h-2 rounded-full ${ok ? "bg-green-500" : "bg-red-500"}`}
-          />
-          {ok ? "정상" : "확인 필요"}
-          <span className="text-gray-400">·</span>
-          incident {summary?.open_incidents ?? "?"}
-          <span className="text-gray-400">·</span>
-          백업 {fmtKST(summary?.last_backup?.time)}
-        </span>
-      </header>
-
-      <div className="grid gap-4 sm:grid-cols-3">
-        <Link href="/library" className={card}>
-          <h2 className="font-semibold mb-2">📚 도서관</h2>
-          <ul className={`${dim} space-y-1`}>
-            {novels.length ? (
-              novels.map((n) => (
-                <li key={n.id} className="truncate">{n.title}</li>
-              ))
-            ) : (
-              <li className="text-gray-400">—</li>
-            )}
-          </ul>
-        </Link>
-
-        <Link href="/news" className={card}>
-          <h2 className="font-semibold mb-2">📰 뉴스</h2>
-          <ul className={`${dim} space-y-1`}>
-            {news.length ? (
-              news.map((a) => (
-                <li key={a.id} className="truncate">{a.title_ko || a.title}</li>
-              ))
-            ) : (
-              <li className="text-gray-400">—</li>
-            )}
-          </ul>
-        </Link>
-
-        <Link href="/status" className={card}>
-          <h2 className="font-semibold mb-2">📡 상태</h2>
-          <p className={dim}>미해결 incident: {summary?.open_incidents ?? "?"}</p>
-          <p className={`${dim} truncate`}>최근 백업: {summary?.last_backup?.name ?? "—"}</p>
-        </Link>
-      </div>
-
-      <div className={`mt-6 ${dim} flex flex-wrap gap-4`}>
-        <a href={`${DEVFORGE_BASE}/send`} className="underline">🔗 파일교환(devforge)</a>
-        <Link href="/library" className="underline">도서관</Link>
-        <Link href="/news" className="underline">뉴스</Link>
-        <Link href="/status" className="underline">상태</Link>
-      </div>
-    </main>
+    <Suspense fallback={<div className="min-h-screen bg-gray-50 dark:bg-gray-900" />}>
+      <LibraryClient novels={novels} />
+    </Suspense>
   );
 }

@@ -14,8 +14,8 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "DevForge",
-  description: "DevForge 포털 — 도서관·뉴스·상태",
+  title: "miniebook",
+  description: "전자책 라이브러리",
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
@@ -26,11 +26,8 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
     >
       <body className="min-h-full flex flex-col">
         <nav className="border-b border-gray-200 dark:border-gray-800">
-          <div className="mx-auto w-full max-w-5xl p-3 flex gap-4 text-sm">
-            <Link href="/" className="font-semibold">DevForge</Link>
-            <Link href="/library">도서관</Link>
-            <Link href="/news">뉴스</Link>
-            <Link href="/status">상태</Link>
+          <div className="mx-auto w-full max-w-6xl p-3 flex gap-4 text-sm">
+            <Link href="/" className="font-semibold">miniebook</Link>
           </div>
         </nav>
         {children}

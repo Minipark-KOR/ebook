@@ -3,7 +3,6 @@
 import { useMemo, useState } from "react";
 import Image from "next/image";
 import Link from "next/link";
-import { useSearchParams, useRouter } from "next/navigation";
 import { Novel, MediaType } from "@/lib/api";
 
 const MEDIA_TYPE_LABEL: Record<string, string> = {
@@ -20,30 +19,13 @@ const TABS: { value: MediaType | "all"; label: string }[] = [
 ];
 
 export default function LibraryClient({ novels }: { novels: Novel[] }) {
-  const searchParams = useSearchParams();
-  const router = useRouter();
-
-  const requestedType = searchParams.get("type") as MediaType | null;
-  const [type, setType] = useState<MediaType | "all">(
-    requestedType && ["novel", "comic", "webtoon"].includes(requestedType)
-      ? requestedType
-      : "all"
-  );
+  const [type, setType] = useState<MediaType | "all">("all");
 
   const filtered = useMemo(
     () =>
       type === "all" ? novels : novels.filter((n) => n.mediaType === type),
     [novels, type]
   );
-
-  function selectTab(t: MediaType | "all") {
-    setType(t);
-    const qs = new URLSearchParams(searchParams.toString());
-    if (t === "all") qs.delete("type");
-    else qs.set("type", t);
-    const next = qs.toString() ? `?${qs.toString()}` : "";
-    router.replace(`/${next}`, { scroll: false });
-  }
 
   return (
     <div className="min-h-screen bg-gray-50 dark:bg-gray-900">
@@ -59,7 +41,7 @@ export default function LibraryClient({ novels }: { novels: Novel[] }) {
           {TABS.map((t) => (
             <button
               key={t.value}
-              onClick={() => selectTab(t.value)}
+              onClick={() => setType(t.value)}
               className={
                 "px-4 py-2 rounded text-sm font-medium transition-colors " +
                 (type === t.value

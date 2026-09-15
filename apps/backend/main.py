@@ -16,6 +16,10 @@ env_path = Path(__file__).parent / ".env"
 load_dotenv(env_path)
 
 from routers import novels, chapters, metadata, pipeline
+from lib.database import init_db
+
+# SQLite 초기화
+init_db()
 
 app = FastAPI(
     title="eBook API",

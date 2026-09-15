@@ -1,14 +1,23 @@
 #!/usr/bin/env python3
-# Status: experimental
-# Path: none — 초기 구현
-"""JSON 파일 읽기 서비스"""
+# Status: new
+# Path: none — SQLite 기반으로 전환
+"""JSON 파일 읽기 서비스 — SQLite 인덱스 기반.
+
+JSON 파일은 소스 오브 데이터로 유지.
+SQLite는 메타데이터/챕터 인덱스를 관리하여 빠른 조회 보장.
+캐시 계층을 통해 반복적인 DB 조회를 방지.
+"""
 
 import json
 import re
+import sqlite3
+import time
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 from urllib.parse import quote
 
+from lib.database import get_connection, init_db, DB_PATH
 from lib.paths import (
     normalize_media_type,
     find_novel_dir,
@@ -17,13 +26,40 @@ from lib.paths import (
 )
 
 
-# 인덱스 캐시 파일명
-CHAPTERS_INDEX_FILE = "_chapters_index.json"
-
-# 로컬 표지 디렉토리 — namu.wiki CDN이 데이터센터 IP를 403 차단해 image-proxy(502)가
-# 발생하므로, 로컬에 저장된 표지가 있으면 /api/covers 정적 서빙을 우선 사용한다.
 COVERS_DIR = Path("/opt/ai_data/flaresolverr/covers")
 
+
+# ============================================================
+# TTL 캐시 — 5분 간격으로 갱신
+# ============================================================
+
+_cache: dict = {}
+_cache_ts: dict = {}
+CACHE_TTL = 300  # 5분
+
+
+def _get_cached(key: str, factory, ttl: int = CACHE_TTL):
+    """TTL 기반 캐시 조회."""
+    now = time.time()
+    if now - _cache_ts.get(key, 0) < ttl:
+        return _cache.get(key)
+    result = factory()
+    _cache[key] = result
+    _cache_ts[key] = now
+    return result
+
+
+def invalidate_cache(prefix: str = ""):
+    """캐시 무효화."""
+    keys_to_delete = [k for k in _cache if k.startswith(prefix)]
+    for k in keys_to_delete:
+        del _cache[k]
+        del _cache_ts[k]
+
+
+# ============================================================
+# 유틸리티
+# ============================================================
 
 def cover_url_for(novel_id: str, fallback: Optional[str] = None) -> Optional[str]:
     """로컬 표지 파일이 있으면 /api/covers 경로로, 없으면 기존 coverUrl 폴백."""
@@ -34,84 +70,191 @@ def cover_url_for(novel_id: str, fallback: Optional[str] = None) -> Optional[str
     return fallback
 
 
-def rebuild_chapters_index(novel_dir: Path) -> list[dict]:
-    """모든 JSON 파일을 스캔하여 챕터 목록 인덱스 재구축.
+def _row_to_novel(row: sqlite3.Row) -> dict:
+    """SQLite Row → Novel 딕셔너리 변환."""
+    novel = dict(row)
+    novel["mediaType"] = novel["media_type"]
+    novel["totalChapters"] = novel["total_chapters"]
+    novel["genre"] = json.loads(novel.get("genre") or "[]")
+    novel["coverUrl"] = cover_url_for(novel["id"], novel.get("cover_url"))
+    return novel
 
-    각 요청마다 모든 파일을 열지 않고 인덱스 캐시를 사용하기 위함.
-    save_chapter() 호출 시 자동 갱신됨.
-    """
-    chapters = []
-    for json_file in sorted(novel_dir.glob("*.json")):
-        if json_file.name == "meta.json" or json_file.name == CHAPTERS_INDEX_FILE:
-            continue
+
+# ============================================================
+# SQLite 기반 함수
+# ============================================================
+
+def get_novel_list(media_type: Optional[str] = None) -> list[dict]:
+    """작품 목록 조회 — SQLite + 캐시."""
+    want = normalize_media_type(media_type) if media_type else None
+    cache_key = f"novel_list:{want or 'all'}"
+
+    def _fetch():
+        conn = get_connection()
         try:
-            with open(json_file, "r", encoding="utf-8") as f:
+            if want:
+                rows = conn.execute(
+                    "SELECT * FROM novels WHERE media_type=? ORDER BY title",
+                    (want,),
+                ).fetchall()
+            else:
+                rows = conn.execute("SELECT * FROM novels ORDER BY title").fetchall()
+            return [_row_to_novel(r) for r in rows]
+        finally:
+            conn.close()
+
+    return _get_cached(cache_key, _fetch)
+
+
+def get_novel_detail(novel_id: str) -> Optional[dict]:
+    """작품 상세 조회 — SQLite + 캐시."""
+    cache_key = f"novel_detail:{novel_id}"
+
+    def _fetch():
+        conn = get_connection()
+        try:
+            row = conn.execute("SELECT * FROM novels WHERE id=?", (novel_id,)).fetchone()
+            return _row_to_novel(row) if row else None
+        finally:
+            conn.close()
+
+    return _get_cached(cache_key, _fetch)
+
+
+def get_chapter_list(novel_id: str, page: int = 1, limit: int = 20) -> dict:
+    """회차 목록 조회 — SQLite 인덱스 + 캐시."""
+    cache_key = f"chapter_list:{novel_id}:{page}:{limit}"
+
+    def _fetch():
+        conn = get_connection()
+        try:
+            total = conn.execute(
+                "SELECT COUNT(*) FROM chapters WHERE novel_id=?", (novel_id,)
+            ).fetchone()[0]
+
+            start = (page - 1) * limit
+            rows = conn.execute(
+                """SELECT wr_id, chapter, title, content_length
+                   FROM chapters
+                   WHERE novel_id=?
+                   ORDER BY
+                     CASE WHEN chapter IS NOT NULL AND chapter > 0 THEN 0 ELSE 1 END,
+                     COALESCE(chapter, wr_id)
+                   LIMIT ? OFFSET ?""",
+                (novel_id, limit, start),
+            ).fetchall()
+
+            data = [
+                {
+                    "wr_id": r["wr_id"],
+                    "chapter": r["chapter"],
+                    "title": r["title"],
+                    "contentLength": r["content_length"],
+                }
+                for r in rows
+            ]
+
+            return {
+                "data": data,
+                "pagination": {"page": page, "limit": limit, "total": total},
+            }
+        finally:
+            conn.close()
+
+    return _get_cached(cache_key, _fetch, ttl=60)  # 목록은 1분 캐시
+
+
+def extract_images_from_content(content: str) -> list[str]:
+    """마크다운 이미지 문법 ![alt](url) 에서 URL 추출."""
+    if not content:
+        return []
+    pattern = r'!\[.*?\]\((https?://[^\s\)]+|/api/[^\s\)]+)\)'
+    return re.findall(pattern, content)
+
+
+def get_chapter_detail(wr_id: int) -> Optional[dict]:
+    """회차 상세 조회 — SQLite 인덱스 + JSON 파일 읽기 + 캐시."""
+    cache_key = f"chapter_detail:{wr_id}"
+
+    def _fetch():
+        conn = get_connection()
+        try:
+            # SQLite에서 챕터 메타데이터 조회
+            row = conn.execute(
+                """SELECT c.*, n.id as novel_id
+                   FROM chapters c
+                   JOIN novels n ON c.novel_id = n.id
+                   WHERE c.wr_id=?""",
+                (wr_id,),
+            ).fetchone()
+
+            if not row:
+                return None
+
+            novel_id = row["novel_id"]
+            content_file = row["content_file"]
+
+            # JSON 파일에서 본문 읽기
+            novel_dir = find_novel_dir(novel_id)
+            if not novel_dir:
+                return None
+
+            chapter_file = novel_dir / content_file
+            if not chapter_file.exists():
+                return None
+
+            with open(chapter_file, "r", encoding="utf-8") as f:
                 data = json.load(f)
-                chapters.append({
-                    "wr_id": data.get("wr_id"),
-                    "chapter": data.get("chapter"),
-                    "title": data.get("title"),
-                    "contentLength": data.get("content_length"),
-                })
-        except (json.JSONDecodeError, KeyError):
-            continue
 
-    # chapter 번호 기준 정렬 (없으면 wr_id 폴백) — 화산귀환 등 wr_id 순서가
-    # 뒤섞인 작품 대비, '1화→2화' 탐색이 올바르게 동작하도록.
-    def _key(c):
-        if isinstance(c.get("chapter"), int) and c["chapter"] > 0:
-            return (0, c["chapter"])
-        try:
-            return (1, int(c.get("wr_id") or 0))
-        except (TypeError, ValueError):
-            return (2, 0)
+            content = data.get("content", "")
+            images = extract_images_from_content(content)
 
-    chapters.sort(key=_key)
+            # 이전/다음 회차 — SQLite 인덱스에서 바로 조회
+            current_chapter = row["chapter"]
+            if current_chapter is not None and current_chapter > 0:
+                prev_row = conn.execute(
+                    """SELECT wr_id FROM chapters
+                       WHERE novel_id=? AND chapter IS NOT NULL AND chapter > 0 AND chapter < ?
+                       ORDER BY chapter DESC LIMIT 1""",
+                    (novel_id, current_chapter),
+                ).fetchone()
+                next_row = conn.execute(
+                    """SELECT wr_id FROM chapters
+                       WHERE novel_id=? AND chapter IS NOT NULL AND chapter > 0 AND chapter > ?
+                       ORDER BY chapter ASC LIMIT 1""",
+                    (novel_id, current_chapter),
+                ).fetchone()
+            else:
+                prev_row = conn.execute(
+                    """SELECT wr_id FROM chapters
+                       WHERE novel_id=? AND wr_id < ?
+                       ORDER BY wr_id DESC LIMIT 1""",
+                    (novel_id, wr_id),
+                ).fetchone()
+                next_row = conn.execute(
+                    """SELECT wr_id FROM chapters
+                       WHERE novel_id=? AND wr_id > ?
+                       ORDER BY wr_id ASC LIMIT 1""",
+                    (novel_id, wr_id),
+                ).fetchone()
 
-    # 인덱스 캐시 파일 저장
-    index_path = novel_dir / CHAPTERS_INDEX_FILE
-    index_data = {
-        "updated_at": __import__("datetime").datetime.now().isoformat(),
-        "chapters": chapters,
-    }
-    try:
-        with open(index_path, "w", encoding="utf-8") as f:
-            json.dump(index_data, f, ensure_ascii=False, indent=2)
-    except Exception:
-        pass  # 캐시 실패는 치명적이지 않음
+            return {
+                "wr_id": data.get("wr_id"),
+                "chapter": data.get("chapter"),
+                "title": data.get("title"),
+                "content": content,
+                "images": images,
+                "prevChapter": prev_row["wr_id"] if prev_row else None,
+                "nextChapter": next_row["wr_id"] if next_row else None,
+            }
+        finally:
+            conn.close()
 
-    return chapters
-
-
-def load_chapters_index(novel_dir: Path) -> Optional[list[dict]]:
-    """챕터 인덱스 캐시 로드.
-
-    없으면 재구축 후 반환.
-    """
-    index_path = novel_dir / CHAPTERS_INDEX_FILE
-    if index_path.exists():
-        try:
-            with open(index_path, "r", encoding="utf-8") as f:
-                index_data = json.load(f)
-            if "chapters" in index_data:
-                return index_data["chapters"]
-        except (json.JSONDecodeError, OSError):
-            pass
-
-    # 캐시 없으면 재구축
-    return rebuild_chapters_index(novel_dir)
+    return _get_cached(cache_key, _fetch, ttl=600)  # 챕터는 10분 캐시
 
 
 def resolve_status(meta: dict, novel_dir: Path) -> str:
-    """연재 상태 해석 — 완결/연재중 구분의 단일 진실 원천.
-
-    우선순위:
-    1. meta.status가 (완결/연재중/연재/단편) → 정규화해 사용
-    2. 누락/unknown → 마지막 챕터 수집일 기준 추론
-       (14일 이상 지나면 완결, 그 외 연재중)
-
-    표시용 정규값: "완결" | "연재중" | "단편"
-    """
+    """연재 상태 해석 — 기존 로직 유지."""
     s = (meta.get("status") or "").strip()
     if s == "완결":
         return "완결"
@@ -119,10 +262,9 @@ def resolve_status(meta: dict, novel_dir: Path) -> str:
         return "단편"
     if s in ("연재중", "연재"):
         return "연재중"
-    # fallback: 수집 이력으로 추론 (상태가 unknown/없는 경우만)
     latest = ""
     for f in novel_dir.glob("*.json"):
-        if f.name in ("meta.json", CHAPTERS_INDEX_FILE) or not f.stem.isdigit():
+        if f.name in ("meta.json", "_chapters_index.json") or not f.stem.isdigit():
             continue
         try:
             with open(f, encoding="utf-8") as fh:
@@ -133,7 +275,6 @@ def resolve_status(meta: dict, novel_dir: Path) -> str:
         except Exception:
             continue
     if latest:
-        from datetime import datetime, timezone
         try:
             if latest.endswith("Z"):
                 latest = latest[:-1] + "+00:00"
@@ -145,183 +286,3 @@ def resolve_status(meta: dict, novel_dir: Path) -> str:
         except Exception:
             pass
     return "연재중"
-
-
-def get_novel_list(media_type: Optional[str] = None) -> list[dict]:
-    """작품 목록 조회 (media_type 지정 시 해당 타입만)."""
-    want = normalize_media_type(media_type) if media_type else None
-    novels = []
-    for folder_type, novel_dir in iter_novel_dirs():
-        if want and folder_type != want:
-            continue
-        meta_file = novel_dir / "meta.json"
-        if meta_file.exists():
-            with open(meta_file, "r", encoding="utf-8") as f:
-                meta = json.load(f)
-            if not meta.get("id"):
-                meta["id"] = novel_dir.name
-            meta["status"] = resolve_status(meta, novel_dir)
-        else:
-            # 디렉토리 이름으로 메타데이터 생성
-            chapters = list(novel_dir.glob("*.json"))
-            if not chapters:
-                continue
-            meta = {
-                "id": novel_dir.name,
-                "title": novel_dir.name.replace("_", " "),
-                "author": "미상",
-                "totalChapters": len(chapters),
-                "coverUrl": None,
-                "status": resolve_status({}, novel_dir),
-            }
-        mt = normalize_media_type(meta.get("media_type") or folder_type)
-        meta["media_type"] = mt
-        meta["mediaType"] = mt
-        # 로컬 표지 우선 (namu image-proxy 502 대응)
-        meta["coverUrl"] = cover_url_for(novel_dir.name, meta.get("coverUrl"))
-        novels.append(meta)
-    return novels
-
-
-def get_novel_detail(novel_id: str) -> Optional[dict]:
-    """작품 상세 조회 (media 폴더 전체 검색)."""
-    found = find_novel_dir_with_type(novel_id)
-    if not found:
-        return None
-    folder_type, novel_dir = found
-
-    # meta.json이 있으면 우선 사용
-    meta_file = novel_dir / "meta.json"
-    if meta_file.exists():
-        with open(meta_file, "r", encoding="utf-8") as f:
-            meta = json.load(f)
-        if not meta.get("id"):
-            meta["id"] = novel_id
-        # 챕터 수는 실제 파일 기준으로 갱신 (meta.json, 인덱스 제외)
-        chapters = [f for f in novel_dir.glob("*.json")
-                    if f.name not in ("meta.json", CHAPTERS_INDEX_FILE)]
-        meta["totalChapters"] = len(chapters)
-        meta["status"] = resolve_status(meta, novel_dir)
-    else:
-        chapters = [f for f in novel_dir.glob("*.json")
-                    if f.name not in ("meta.json", CHAPTERS_INDEX_FILE)]
-        if not chapters:
-            return None
-        meta = {
-            "id": novel_id,
-            "title": novel_id.replace("_", " "),
-            "author": "미상",
-            "totalChapters": len(chapters),
-            "coverUrl": None,
-            "status": resolve_status({}, novel_dir),
-        }
-
-    mt = normalize_media_type(meta.get("media_type") or folder_type)
-    meta["media_type"] = mt
-    meta["mediaType"] = mt
-    # 로컬 표지 우선 (namu image-proxy 502 대응)
-    meta["coverUrl"] = cover_url_for(novel_dir.name, meta.get("coverUrl"))
-    return meta
-
-
-def get_chapter_list(novel_id: str, page: int = 1, limit: int = 20) -> dict:
-    """회차 목록 조회 (인덱스 캐시 사용)"""
-    novel_dir = find_novel_dir(novel_id)
-    if not novel_dir:
-        return {"data": [], "pagination": {"page": page, "limit": limit, "total": 0}}
-
-    # 인덱스 캐시에서 로드
-    chapters = load_chapters_index(novel_dir)
-
-    # 페이지네이션
-    start = (page - 1) * limit
-    end = start + limit
-    paginated = chapters[start:end]
-
-    return {
-        "data": paginated,
-        "pagination": {
-            "page": page,
-            "limit": limit,
-            "total": len(chapters),
-        },
-    }
-
-
-def extract_images_from_content(content: str) -> list[str]:
-    """마크다운 이미지 문법 ![alt](url) 에서 URL 추출.
-
-    http(s) 절대 URL뿐 아니라 로컬 경로(/api/webtoon_images/...)도 매칭.
-    """
-    if not content:
-        return []
-    # ![alt](url) 패턴 — url은 http(s) 또는 /api/ 로 시작하는 상대 경로
-    pattern = r'!\[.*?\]\((https?://[^\s\)]+|/api/[^\s\)]+)\)'
-    return re.findall(pattern, content)
-
-
-def get_chapter_detail(wr_id: int) -> Optional[dict]:
-    """회차 상세 조회 (media 폴더 전체 검색)"""
-    for _folder_type, novel_dir in iter_novel_dirs():
-        chapter_file = novel_dir / f"{wr_id}.json"
-        if not chapter_file.exists() or chapter_file.name in ("meta.json", CHAPTERS_INDEX_FILE):
-            continue
-        try:
-            with open(chapter_file, "r", encoding="utf-8") as f:
-                data = json.load(f)
-
-            # 이전/다음 회차 찾기 (meta.json, 인덱스 제외)
-            # 정렬 기준: chapter 번호 (파일명 wr_id가 아니라 회차 번호)
-            # 화산귀환처럼 wr_id 정렬이 뒤섞이는 작품 대비.
-            chapter_files = [
-                f for f in novel_dir.glob("*.json")
-                if f.name not in ("meta.json", CHAPTERS_INDEX_FILE)
-            ]
-
-            def _chapter_key(f) -> int:
-                try:
-                    with open(f, "r", encoding="utf-8") as fh:
-                        d = json.load(fh)
-                    ch = d.get("chapter")
-                    if isinstance(ch, int) and ch > 0:
-                        return ch
-                except Exception:
-                    pass
-                # chapter 없으면 wr_id로 폴백
-                try:
-                    return int(f.stem)
-                except ValueError:
-                    return 0
-
-            chapters = sorted(chapter_files, key=_chapter_key)
-            current_idx = None
-            for idx, ch in enumerate(chapters):
-                if ch.stem == str(wr_id):
-                    current_idx = idx
-                    break
-
-            prev_chapter = None
-            next_chapter = None
-            if current_idx is not None:
-                if current_idx > 0:
-                    prev_file = chapters[current_idx - 1]
-                    prev_chapter = int(prev_file.stem)
-                if current_idx < len(chapters) - 1:
-                    next_file = chapters[current_idx + 1]
-                    next_chapter = int(next_file.stem)
-
-            content = data.get("content", "")
-            images = extract_images_from_content(content)
-
-            return {
-                "wr_id": data.get("wr_id"),
-                "chapter": data.get("chapter"),
-                "title": data.get("title"),
-                "content": content,
-                "images": images,
-                "prevChapter": prev_chapter,
-                "nextChapter": next_chapter,
-            }
-        except (json.JSONDecodeError, KeyError):
-            continue
-    return None
